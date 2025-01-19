@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # SQLite 数据库文件路径
-DATABASE = "kunlun.db"
+DATABASE = "db/kunlun.db"
 
 
 # 初始化数据库

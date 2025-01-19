@@ -59,14 +59,14 @@ cd kunlun-server-python
 ##### 使用 Docker 运行
 
 确保已安装 Docker，然后运行以下命令：
-确保已安装 Docker，然后运行以下命令：
 
 ```bash
+mkdir -p /opt/kunlun-server/db
 docker build -t kunlun-server .
-docker run -v /opt/kunlun-server:/app -p 8008:8008 kunlun-server
+docker run -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server
 ```
 
-- `-v /opt/kunlun-server:/app`：将主机的 `/opt/kunlun-server` 目录挂载到容器内的 `/app` 目录，用于持久化 SQLite 数据库文件。
+- `-v /opt/kunlun-server/db:/app/db`：将主机的 `/opt/kunlun-server/db` 目录挂载到容器内的 `/app/db` 目录，用于持久化 SQLite 数据库文件。
 - `-p 8008:8008`：将容器的 8008 端口映射到主机的 8008 端口。
 
 ##### 访问 Web 界面
