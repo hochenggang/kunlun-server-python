@@ -8,7 +8,7 @@ RUN apk add --no-cache git
 WORKDIR /app
 
 # 从 GitHub 拉取代码
-RUN git clone https://github.com/hochenggang/managi-backend.git .
+RUN git clone https://github.com/hochenggang/kunlun-server-python.git .
 
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
