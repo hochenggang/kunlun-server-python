@@ -71,8 +71,10 @@ docker run -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server
 
 ##### 访问 Web 界面
 
-在浏览器中访问 `http://localhost:8008`，即可查看服务器监控仪表盘。
+在浏览器中访问 `http://<server-ip>:8008`，即可查看服务器监控仪表盘。
+为了增强安全性和性能，可以使用 Nginx 作为反向代理，并通过 Cloudflare 配置 SSL。
 
+注意：目前这个版本的 Server 仅为 Demo 版本，没有鉴权和认证，不建议公开分享，避免被打爆，请勿用于生产环境。或许，你可以自行开发更好的 Server
 ---
 
 ### 2. 部署 Kunlun Client
