@@ -55,7 +55,9 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         const { useState, useEffect, useMemo, useCallback, useReducer, useRef } = React;
-        const HOST = '';
+        // const HOST = '';
+        const HOST = 'https://kunlun.imhcg.cn';
+
 
         // Helper functions
         const formatGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
@@ -129,7 +131,7 @@
                     if (data && data.length > 0) {
                         // 处理数据，生成 Chart.js 所需的格式
                         const labels = Array.from({ length: data[0].length }, (_, i) => {
-                            const time = new Date(Date.now() - (selectedSeconds - i * (selectedSeconds / 30)) * 1000);
+                            const time = new Date(Date.now() - (selectedSeconds - i * (selectedSeconds / data[0].length)) * 1000);
                             return time.toLocaleTimeString();
                         });
 
