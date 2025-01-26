@@ -687,6 +687,8 @@
                             PercentageCircle({ percentage: (used / total).toFixed(2) }),
                             React.createElement('span', null, `${(used / 1).toFixed(2)}/${(total / 1).toFixed(2)}${unit}`),
                         )
+
+
                         // 更新 renderServers
                         renderServers.current[machineId] = {
                             ...server,
@@ -700,7 +702,7 @@
                             tasksInfo: `${server.running_tasks}/${server.total_tasks}`,
                             trafficInfo: `${BtoGB(server.default_interface_net_rx_bytes)}/${BtoGB(server.default_interface_net_tx_bytes)}`,
                             connectionInfo: `${server.tcp_connections}/${server.udp_connections}`,
-                            rootDiskInfo: PercentageInfo({ used: BtoGB(server.root_disk_avail_kb * 1024), total: BtoGB(server.root_disk_total_kb * 1024) }),
+                            rootDiskInfo: PercentageInfo({ used: BtoGB((server.root_disk_total_kb - server.root_disk_avail_kb) * 1024), total: BtoGB(server.root_disk_total_kb * 1024) }),
                             isOffline: isOutdated(server.timestamp),
                             uptimeDays: uptimeDays,
                         };
