@@ -47,7 +47,23 @@ Kunlun Server Monitoring 由以下组件组成：
 
 ### 1. 部署 Kunlun Server
 
-#### 使用 Docker 部署
+
+#### 使用 Docker 拉取镜像部署 （更快捷）
+
+```bash
+docker pull hochenggang/kunlun-server:0.1.0
+
+mkdir -p /opt/kunlun-server/db
+
+docker run -v /opt/kunlun-server/db:/app/db -p 8008:8008 hochenggang/kunlun-server:0.1.0
+
+```
+
+- `-v /opt/kunlun-server/db:/app/db`：将主机的 `/opt/kunlun-server/db` 目录挂载到容器内的 `/app/db` 目录，用于持久化 SQLite 数据库文件。
+- `-p 8008:8008`：访问主机的 8008 端口时，转发到容器的 8008 端口。若8008端口已经被使用，你可以修改`-p 宿主机端口:8008` 
+
+
+#### 使用 Docker 自行构建镜像部署 （更安全）
 
 ##### 克隆项目
 
@@ -62,22 +78,22 @@ cd kunlun-server-python
 
 ```bash
 mkdir -p /opt/kunlun-server/db
-docker build -t kunlun-server .
-docker run -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server
+docker build -t kunlun-server:0.1.0 .
+docker run -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server:0.1.0
 ```
 
-- `-v /opt/kunlun-server/db:/app/db`：将主机的 `/opt/kunlun-server/db` 目录挂载到容器内的 `/app/db` 目录，用于持久化 SQLite 数据库文件。
-- `-p 8008:8008`：将容器的 8008 端口映射到主机的 8008 端口。
+
 
 ##### 访问 Web 界面
 
 在浏览器中访问 `http://<server-ip>:8008`，即可查看服务器监控仪表盘。
 为了增强安全性和性能，可以使用 Nginx 作为反向代理，并通过 Cloudflare 配置 SSL。
 
-注意：目前这个版本的 Server 仅为 Demo 版本，没有鉴权和认证，不建议公开分享，避免被打爆，请勿用于生产环境。或许，你可以自行开发更好的 Server
+注意：目前这个版本的 Server 仅为 Demo 版本，极简化设计、没有鉴权和认证，不建议公开分享，避免被打爆，请勿用于生产环境。或许，你可以自行开发更好的 Server
+
 ---
 
-### 2. 部署 Kunlun Client
+### 2. 部署 [Kunlun Client](https://github.com/hochenggang/kunlun)
 
 #### 使用安装脚本
 
@@ -89,9 +105,9 @@ chmod +x kunlun-client-install.sh
 ./kunlun-client-install.sh
 ```
 
-按照提示输入监测间隔（秒）和上报地址（如 `http://<server-ip>:8008/status`）即可完成安装。
+按照提示输入上报地址（如 `http://<server-ip>:8008/status`）即可完成安装。
 
-#### 查看服务状态
+
 
 安装完成后，Kunlun Client 会自动启动。您可以使用以下命令查看服务状态：
 
@@ -100,80 +116,13 @@ systemctl status kunlun
 ```
 
 ---
+#### 自行拉取源码编译
 
-## 数据采集与上报
-
-Kunlun Client 采集的指标数据包括以下字段：
-
-| 参数名               | 类型     | 说明                                                                 |
-|----------------------|----------|----------------------------------------------------------------------|
-| `machine_id`         | `char`   | Linux 服务器的 machine-id                                            |
-| `uptime`             | `long`   | 系统运行时间（秒）。                                                |
-| `load_1min`          | `double` | 系统 1 分钟负载。                                                   |
-| `load_5min`          | `double` | 系统 5 分钟负载。                                                   |
-| `load_15min`         | `double` | 系统 15 分钟负载。                                                  |
-| `net_tx`             | `ulong`  | 默认路由接口的发送流量（字节）。                                    |
-| `net_rx`             | `ulong`  | 默认路由接口的接收流量（字节）。                                    |
-| `disk_delay`         | `long`   | 磁盘延迟（微秒）。                                                  |
-| `cpu_delay`          | `long`   | CPU 延迟（微秒）。                                                  |
-| `disks_total_kb`     | `ulong`  | 磁盘总容量（KB）。                                                  |
-| `disks_avail_kb`     | `ulong`  | 磁盘可用容量（KB）。                                                |
-| `tcp_connections`    | `int`    | TCP 连接数。                                                        |
-| `udp_connections`    | `int`    | UDP 连接数。                                                        |
-| `cpu_num_cores`      | `int`    | CPU 核心数。                                                        |
-| `task_total`         | `int`    | 总任务数。                                                          |
-| `task_running`       | `int`    | 正在运行的任务数。                                                  |
-| `cpu_us`             | `double` | 用户空间占用 CPU 时间累计值。                                      |
-| `cpu_sy`             | `double` | 内核空间占用 CPU 时间累计值。                                      |
-| `cpu_ni`             | `double` | 用户进程空间内改变过优先级的进程占用 CPU 时间累计值。              |
-| `cpu_id`             | `double` | 空闲 CPU 时间累计值。                                              |
-| `cpu_wa`             | `double` | 等待 I/O 的 CPU 时间累计值。                                       |
-| `cpu_hi`             | `double` | 硬件中断占用 CPU 时间累计值。                                      |
-| `cpu_st`             | `double` | 虚拟机偷取的 CPU 时间累计值。                                      |
-| `mem_total`          | `double` | 总内存大小（MiB）。                                                 |
-| `mem_free`           | `double` | 空闲内存大小（MiB）。                                               |
-| `mem_used`           | `double` | 已用内存大小（MiB）。                                               |
-| `mem_buff_cache`     | `double` | 缓存和缓冲区内存大小（MiB）。                                       |
-
----
-
-## 配置说明
-
-### 1. 监测间隔
-监测间隔是指 Kunlun Client 采集系统指标并上报的时间间隔（单位：秒）。默认值为 10 秒。
-
-### 2. 上报地址
-上报地址是指 Kunlun Client 将采集到的指标数据发送到的 HTTP 地址。例如：`http://<server-ip>:8008/status`。
-
-### 3. 服务配置
-Kunlun Client 的 systemd 服务配置文件位于 `/etc/systemd/system/kunlun.service`，内容如下：
-
-```ini
-[Unit]
-Description=Kunlun System Monitor
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/kunlun-client -s 10 -u http://<server-ip>:8008/status
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-```
-
----
-
-## 从源码构建
-
-### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/hochenggang/kunlun.git
 cd kunlun
 ```
-
-### 2. 编译 Kunlun Client
 
 使用 `gcc` 编译 Kunlun Client：
 
@@ -181,23 +130,6 @@ cd kunlun
 gcc -o kunlun-client kunlun-client.c
 ```
 
----
-
-## 常见问题
-
-### 1. 上报地址校验失败
-确保上报地址返回的内容包含 `kunlun`。例如，可以在服务器上创建一个简单的 HTTP 服务，返回 `kunlun`。
-
-### 2. 服务启动失败
-检查 `/etc/systemd/system/kunlun.service` 文件中的路径和参数是否正确，确保 Kunlun Client 二进制文件存在且可执行。
-
-### 3. 如何修改监测间隔或上报地址
-修改 `/etc/systemd/system/kunlun.service` 文件中的 `ExecStart` 参数，然后重启服务：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart kunlun
-```
 
 ---
 
@@ -215,7 +147,7 @@ Kunlun Server Monitoring 基于 [MIT 许可证](https://opensource.org/licenses/
 
 ## 联系我们
 
-如有问题或建议，请通过 GitHub Issues 联系我们。
+如有问题或建议，请通过 GitHub Issues 联系我。
 
 ---
 

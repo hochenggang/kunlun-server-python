@@ -4,7 +4,7 @@ import sqlite3
 from typing import Optional
 
 from pydantic import BaseModel
-from fastapi import FastAPI, Form, Response, Request, HTTPException
+from fastapi import FastAPI, Form, Response, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
