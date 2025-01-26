@@ -11,13 +11,19 @@
     <style>
         .grid-container {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
             gap: 0.5rem;
         }
 
         .kv-k {
-            font-size: 0.8rem;
+            font-size: 0.7rem;
             font-weight: lighter;
+        }
+
+        .kv-v {
+            font-size: 0.8rem;
+            font-weight: normal;
+            color: #2d2d2d;
         }
 
         .operate-button {
@@ -40,11 +46,19 @@
         #trendChart {
             min-height: 300px;
         }
+
+        #modal-root {
+            position: fixed;
+            z-index: 9999;
+            width: 100%;
+            height: 100%;
+        }
     </style>
 </head>
 
 <body>
     <div id="root"></div>
+    <div id="modal-root"></div>
 
     <!-- React and ReactDOM CDN -->
     <script src="https://cdn.jsdelivr.net/npm/react@17.0.2/umd/react.production.min.js" crossorigin></script>
@@ -55,114 +69,191 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         const { useState, useEffect, useMemo, useCallback, useReducer, useRef } = React;
-        const HOST = '';
+        const HOST = 'http://localhost:8008';
 
 
         // Helper functions
-        const formatGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
-        const memoryUsagePercentage = (used, total) => ((used / total) * 100).toFixed(2);
+        const BtoGB = (bytes) => (bytes / 1024 / 1024 / 1024).toFixed(2);
+        const usagePercentage = (used, total) => ((used / total) * 100).toFixed(2);
         const formatTime = (timestamp) => new Date(timestamp * 1000).toLocaleTimeString();
         const isOutdated = (timestamp) => Math.floor(Date.now() / 1000) - timestamp > 1 * 60;
 
-        // 定义 titles 对象
-        const titles = {
-            formattedTime: '更新时间',
-            client_id: '节点',
-            cpu_delay: 'CPU 延迟 µs',
-            disk_delay: '磁盘延迟 µs',
-            memoryUsage: '内存使用率 %',
-            cpu_us_percent: 'CPU 用户 %',
-            cpu_sy_percent: 'CPU 系统 %',
-            cpu_ni_percent: 'CPU Nice %',
-            cpu_id_percent: 'CPU 空闲 %',
-            cpu_wa_percent: 'CPU IOWait %',
-            cpu_hi_percent: 'CPU IRQ %',
-            cpu_st_percent: 'CPU Steal %',
-            memTotalGB: '内存总量 GB',
-            memUsedGB: '内存使用 GB',
-            memFreeGB: '内存空闲 GB',
-            memBuffCacheGB: '内存缓存 GB',
-            load_1min: '1 分钟负载 %',
-            load_5min: '5 分钟负载 %',
-            load_15min: '15 分钟负载 %',
-            task_running: '运行中任务',
-            task_total: '总任务数',
-            tcp_connections: 'TCP 连接数',
-            uptimeDays: '运行时间 天',
-            netRxGB: '下载总量 GB',
-            netTxGB: '上传总量 GB',
-            netTxSpeedKB: '网速↑ KB',
-            netRxSpeedKB: '网速↓ KB',
-            disksTotalGB: '磁盘总量 GB',
-            disksAvailGB: '磁盘可用 GB',
+
+        // 定义需要渲染的字段，实际服务器返回的字段中有一些不适合直接展示
+        const TITLES = {
+            hostname: ['主机名', '', '当前服务器的主机名称'],
+            uptimeDays: ['运行时间', '天', '服务器自上次启动以来的运行天数'],
+
+            tasksInfo: ['进程 (运行中/全部)', '', '当前运行的进程数量与总进程数量'],
+            loadAverages: ['负载', '', '系统在过去 1、5、15 分钟的平均负载'],
+            memoryUsage: ['内存', '', '当前内存使用情况，已用/可用'],
+
+            trafficInfo: ['总流量 (接收/发送)', 'G', '服务器自上次启动以来的网络总流量，包括接收和发送的数据量'],
+            connectionInfo: ['连接数 (TCP/UDP)', '', '当前 TCP 和 UDP 连接数'],
+            netTxSpeedKB: ['网速↑', 'K', '当前网络上传速度'],
+            netRxSpeedKB: ['网速↓', 'K', '当前网络下载速度'],
+
+            updateAt: ['更新时间', '', '数据最后更新时间'],
+
+            cpu_num_cores: ['CPU 核心数', '', 'CPU 的核心数量'],
+            cpu_delay_us: ['CPU 延迟', 'μs', 'CPU 处理任务的延迟时间'],
+            cpu_us_percent: ['CPU 用户占用', '%', '用户进程占用的 CPU 百分比'],
+            cpu_sy_percent: ['CPU 系统占用', '%', '系统内核占用的 CPU 百分比'],
+            cpu_ni_percent: ['CPU 低优先级', '%', '低优先级进程占用的 CPU 百分比'],
+            cpu_id_percent: ['CPU 空闲', '%', 'CPU 空闲时间的百分比'],
+            cpu_wa_percent: ['CPU IO等待', '%', 'CPU 等待 I/O 操作的时间百分比'],
+            cpu_hi_percent: ['CPU 硬件中断', '%', '硬件中断占用的 CPU 百分比'],
+            cpu_st_percent: ['CPU 被宿主机占用', '%', '虚拟机被宿主机占用的 CPU 百分比'],
+
+            rootDiskInfo: ['根目录', '', '根目录磁盘的使用情况，已用/可用'],
+            disk_delay_us: ['磁盘延迟', 'ms', '根目录磁盘 I/O 操作的延迟时间'],
+            readsPerSecond: ['每秒读取次数', '', '根目录磁盘每秒的读取操作次数'],
+            writesPerSecond: ['每秒写入次数', '', '根目录磁盘每秒的写入操作次数'],
+            avgReadLatency: ['平均读取延迟', 'ms', '根目录磁盘读取操作的平均延迟时间'],
+            avgWriteLatency: ['平均写入延迟', 'ms', '根目录磁盘写入操作的平均延迟时间'],
+            diskUtilization: ['磁盘利用率', '%', '根目录磁盘的使用率百分比'],
+            weightedIoTimePercent: ['加权I/O时间', '%', '根目录磁盘 I/O 操作的加权时间百分比'],
         };
 
-        const TrendModal = ({ clientId, onClose }) => {
-            const [selectedColumns, setSelectedColumns] = useState(['cpu_delay']);
-            const [selectedSeconds, setSelectedSeconds] = useState(900);
-            const [chartData, setChartData] = useState(null);
 
-            // 可选的 columns 和 seconds
-            const columnsOptions = [
-                ["load_1min", "1 分钟负载", "系统在过去1分钟内的平均负载"],
-                ["load_5min", "5 分钟负载", "系统在过去5分钟内的平均负载"],
-                ["load_15min", "15 分钟负载", "系统在过去15分钟内的平均负载"],
-                ["disk_delay", "磁盘延迟 µs", "磁盘创建100个小文件的耗时，单位：毫秒"],
-                ["cpu_delay", "CPU 延迟 µs", "CPU计算100万位圆周率耗时，单位：毫秒"],
-                ["disks_avail_kb", "磁盘可用空间 KB", "磁盘上可用的存储空间，单位：KB"],
-                ["tcp_connections", "TCP 连接数", "当前建立的TCP连接数量"],
-                ["udp_connections", "UDP 连接数", "当前建立的UDP连接数量"],
-                ["task_total", "总任务数", "系统中当前存在的总任务数量"],
-                ["task_running", "运行中任务数", "系统中当前正在运行的任务数量"],
-                ["mem_free", "空闲内存 MB", "系统中当前空闲的内存大小，单位：MB"],
-                ["mem_used", "已用内存 MB", "系统中当前已使用的内存大小，单位：MB"],
-                ["mem_buff_cache", "缓存内存 MB", "系统中用于缓存和缓冲的内存大小，单位：MB"]
+        function PercentageCircle({ percentage }) {
+            const radius = 20; // 圆环半径
+            const circumference = 2 * Math.PI * radius; // 圆环周长
+            const offset = circumference * (1 - percentage); // 根据百分比计算 offset
+
+            return React.createElement(
+                'div',
+                { className: 'inline-block align-middle mr-1', title: percentage * 100 + '%' },
+                React.createElement(
+                    'svg',
+                    {
+                        className: 'w-4 h-4',
+                        viewBox: '0 0 50 50',
+                    },
+                    React.createElement('circle', {
+                        className: 'text-gray-200 stroke-current',
+                        strokeWidth: '7',
+                        fill: 'transparent',
+                        r: radius,
+                        cx: '25',
+                        cy: '25',
+                    }),
+                    React.createElement('circle', {
+                        className: 'text-blue-500 stroke-current',
+                        strokeWidth: '7',
+                        fill: 'transparent',
+                        r: radius,
+                        cx: '25',
+                        cy: '25',
+                        strokeDasharray: circumference,
+                        strokeDashoffset: offset,
+                        style: { transition: 'stroke-dashoffset 0.5s ease' },
+                    })
+                )
+            );
+        }
+
+
+        const TrendModal = ({ clientId, onClose }) => {
+
+            const [apiData, setApiData] = useState(null);
+            const [chartData, setChartData] = useState(null);
+            const [dataLevel, setDataLevel] = useState('seconds'); // 数据级别：seconds, minutes, hours
+            const [selectedKeys, setSelectedKeys] = useState(null); // 选中的 key 列表
+            const [availableKeys, setAvailableKeys] = useState([]); // 可选的 key 列表
+
+            // 数据级别选项
+            const dataLevelOptions = [
+                { value: 'seconds', label: '最近一小时' },
+                { value: 'minutes', label: '最近一天' },
+                { value: 'hours', label: '最近一年' },
             ];
-            const secondsOptions = [[900, '15 分钟'], [1800, '30 分钟'], [3600, '1 小时'], [3600 * 12, '12 小时'], [3600 * 24, '24小时'], [3600 * 24 * 3, '3 天'], [3600 * 24 * 7, '7 天'],];
 
             // 获取历史数据
             const fetchHistoryData = useCallback(async () => {
                 try {
-                    const response = await axios.get(
-                        `${HOST}/status/${clientId}/history?columns=${selectedColumns.join(',')}&seconds=${selectedSeconds}`
-                    );
-                    const { data } = response.data;
+                    const endpoint = `/status/${dataLevel}`; // 根据数据级别选择接口
+                    const response = await axios.get(`${HOST}${endpoint}`, {
+                        params: { client_id: clientId },
+                    });
+
+                    const data = response.data.reverse()
+                    setApiData(data)
+
                     if (data && data.length > 0) {
-                        // 处理数据，生成 Chart.js 所需的格式
-                        const labels = Array.from({ length: data[0].length }, (_, i) => {
-                            const time = new Date(Date.now() - (selectedSeconds - i * (selectedSeconds / data[0].length)) * 1000);
-                            return time.toLocaleTimeString();
-                        });
-
-                        const CHART_COLORS = {
-                            red: 'rgba(255, 99, 132, 0.8)',
-                            orange: 'rgba(255, 159, 64, 0.8)',
-                            yellow: 'rgba(255, 205, 86, 0.8)',
-                            green: 'rgba(75, 192, 192, 0.8)',
-                            blue: 'rgba(54, 162, 235, 0.8)',
-                            purple: 'rgba(153, 102, 255, 0.8)',
-                        };
-
-                        const datasets = selectedColumns.map((column, index) => ({
-                            label: column,
-                            data: data[index],
-                            borderColor: Object.values(CHART_COLORS)[Math.floor(Math.random() * Object.keys(CHART_COLORS).length)], // 随机颜色
-                            fill: false,
-                            pointStyle: false,
-                            borderWidth: 1,
-                        }));
-                        setChartData({ labels, datasets });
+                        console.log(data, '请求成功')
+                        // 提取可用的 key 列表（排除 client_id 和 timestamp）
+                        const keys = Object.keys(data[0]).filter(
+                            (key) => key !== 'client_id' && key !== 'timestamp'
+                        );
+                        setAvailableKeys(keys); // 设置可选的 key 列表
+                        setSelectedKeys(['load_1min'])
                     }
+
 
                 } catch (error) {
                     console.error('Error fetching history data:', error);
                 }
-            }, [clientId, selectedColumns, selectedSeconds]);
+            }, [clientId, dataLevel]);
 
             // 初始化时获取数据
             useEffect(() => {
+                console.log('useEffect', 'init')
                 fetchHistoryData();
             }, [fetchHistoryData]);
+
+            // 数据级别变化时重新获取数据
+            const handleDataLevelChange = (event) => {
+                setDataLevel(event.target.value);
+            };
+
+            // 选中的 key 变化时更新图表
+            const handleSelectedKeysChange = (event) => {
+                console.log('selectedKeys', event.target.selectedOptions)
+                const selected = Array.from(event.target.selectedOptions, (option) => option.value);
+                setSelectedKeys(selected);
+            };
+
+            // 选项变化时渲染dom
+            useEffect(() => {
+                console.log('更新表格数据')
+                if (apiData && apiData.length > 0) {
+
+                    // 处理数据，生成 Chart.js 所需的格式
+                    const labels = apiData.map((item) =>
+                        new Date(item.timestamp * 1000).toLocaleString('zh-CN', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                        })
+                    );
+
+                    const CHART_COLORS = {
+                        red: 'rgba(255, 99, 132, 0.8)',
+                        orange: 'rgba(255, 159, 64, 0.8)',
+                        yellow: 'rgba(255, 205, 86, 0.8)',
+                        green: 'rgba(75, 192, 192, 0.8)',
+                        blue: 'rgba(54, 162, 235, 0.8)',
+                        purple: 'rgba(153, 102, 255, 0.8)',
+                    };
+
+                    const datasets = selectedKeys.map((key, index) => ({
+                        label: key,
+                        data: apiData.map((item) => item[key]),
+                        borderColor: Object.values(CHART_COLORS)[index % Object.keys(CHART_COLORS).length], // 按顺序分配颜色
+                        fill: false,
+                        pointStyle: false,
+                        borderWidth: 1,
+                    }));
+
+                    setChartData({ labels, datasets });
+                }
+            }, [selectedKeys]);
+
+
 
             // 渲染图表
             useEffect(() => {
@@ -174,52 +265,32 @@
                         data: chartData,
                         options: {
                             responsive: true,
-                            maintainAspectRatio: false, // 不保持宽高比，适应移动端
+                            maintainAspectRatio: false,
                             scales: {
                                 x: {
                                     ticks: {
-                                        maxTicksLimit: 5, // 限制X轴显示的标签数量
-                                        autoSkip: true,   // 自动跳过部分标签
-                                        font: {
-                                            size: 10, // 设置X轴标签字体大小
-                                        }
+                                        maxTicksLimit: 5,
+                                        autoSkip: true,
+                                        font: { size: 10 },
                                     },
-                                    grid: {
-                                        display: false, // 隐藏X轴网格线
-                                    }
+                                    grid: { display: false },
                                 },
                                 y: {
                                     ticks: {
-                                        maxTicksLimit: 5, // 限制Y轴显示的标签数量
-                                        font: {
-                                            size: 10, // 设置Y轴标签字体大小
-                                        },
-                                        callback: function (value, index, values) {
-                                            if (value > 10) {
-                                                return value.toFixed(0); // 简化Y轴标签格式
-                                            } else {
-                                                return value.toFixed(2);
-                                            }
-                                        }
+                                        maxTicksLimit: 5,
+                                        font: { size: 10 },
+                                        callback: (value) => (value > 10 ? (value > 1000 ? value.toFixed(0).toLocaleString() : value.toFixed(0)) : value.toFixed(2)),
                                     },
-                                    grid: {
-                                        display: true, // 显示Y轴网格线
-                                        drawBorder: false, // 隐藏Y轴边框
-                                    }
-                                }
+                                    grid: { display: true, drawBorder: false },
+                                },
                             },
                             plugins: {
-                                legend: {
-                                    display: false, // 隐藏图例
-                                },
-                                tooltip: {
-                                    enabled: true, // 启用工具提示
-                                    mode: 'index', // 显示所有数据点的信息
-                                    intersect: false, // 鼠标悬停时显示所有数据点的信息
-                                }
-                            }
+                                legend: { display: false },
+                                tooltip: { enabled: true, mode: 'index', intersect: false },
+                            },
                         },
                     });
+
                     return () => chart.destroy(); // 清理图表实例
                 }
             }, [chartData]);
@@ -243,43 +314,44 @@
                     React.createElement(
                         'div',
                         { className: 'grid grid-cols-2 gap-4 mb-4' },
+                        // 数据级别单选框
                         React.createElement(
                             'div',
                             null,
-                            // React.createElement('label', { className: 'block text-sm font-medium mb-1' }, '统计项'),
+                            React.createElement(
+                                'select',
+                                {
+                                    value: dataLevel,
+                                    onChange: handleDataLevelChange,
+                                    className: 'text-sm w-full p-2 border rounded',
+                                },
+                                dataLevelOptions.map((option) =>
+                                    React.createElement('option', { key: option.value, value: option.value }, option.label)
+                                )
+                            )
+                        ),
+                        // 多选框（数据加载后显示）
+                        availableKeys.length > 0 &&
+                        React.createElement(
+                            'div',
+                            null,
                             React.createElement(
                                 'select',
                                 {
                                     multiple: false,
-                                    value: selectedColumns[0],
-                                    onChange: (e) => setSelectedColumns([e.target.value]),
-                                    className: 'text-sm  w-full p-2 border rounded',
+                                    value: selectedKeys,
+                                    onChange: handleSelectedKeysChange,
+                                    className: 'text-sm w-full p-2 border rounded',
                                 },
-                                columnsOptions.map(([value, option, title]) =>
-                                    React.createElement('option', { key: value, value: value, title: title }, option)
-                                )
-                            )
-                        ),
-                        React.createElement(
-                            'div',
-                            null,
-                            // React.createElement('label', { className: 'block text-sm font-medium mb-1' }, '时间范围'),
-                            React.createElement(
-                                'select',
-                                {
-                                    value: selectedSeconds,
-                                    onChange: (e) => setSelectedSeconds(Number(e.target.value)),
-                                    className: 'text-sm  w-full p-2 border rounded',
-                                },
-                                secondsOptions.map(([value, option]) =>
-                                    React.createElement('option', { key: value, value: value }, `${option}`)
+                                availableKeys.map((key) =>
+                                    React.createElement('option', { key: key, value: key }, key)
                                 )
                             )
                         )
                     ),
                     React.createElement(
                         'div',
-                        { className: 'relative', style: { minHeight: '350px' } }, // 设置固定高度，确保图表不会过大
+                        { className: 'relative', style: { minHeight: '350px' } },
                         React.createElement('canvas', { id: 'trendChart' })
                     )
                 )
@@ -287,19 +359,23 @@
         };
 
 
+
+
+
         // Server component
         const Server = React.memo(({ server, isExpanded, onToggleExpand, selectedFields, onFieldSelection }) => {
+            const modalRoot = document.getElementById('modal-root');
+            if (!modalRoot) return null;
+
             const [showTrendModal, setShowTrendModal] = useState(false);
 
             // KeyValue 组件：用于渲染 k:value 对
             const KeyValue = ({ k, v }) => {
-                if (titles[k]) {
-                    return React.createElement(
-                        'div', {},
-                        React.createElement('span', { className: 'kv-k text-gray-400 text-xs' }, `${titles[k]} `),
-                        React.createElement('div', { className: 'kv-v text-gray-700' }, v)
-                    );
-                }
+                return React.createElement(
+                    'div', {},
+                    React.createElement('span', { className: 'kv-k text-gray-400 text-xs', title: TITLES[k][2] }, TITLES[k][0]),
+                    React.createElement('div', { className: 'kv-v text-gray-700' }, [v, TITLES[k][1]])
+                );
             };
 
             return React.createElement(
@@ -308,12 +384,12 @@
                 React.createElement(
                     'div',
                     {
-                        className: 'p-3 cursor-pointer hover:bg-gray-50 rounded-lg transition-colors',
+                        className: ' p-3 cursor-pointer hover:bg-gray-50 rounded-lg transition-colors',
                         onClick: onToggleExpand
                     },
                     React.createElement(
                         'div',
-                        { className: `flex items-center justify-between text-sm ` },
+                        { className: `grid-container text-sm ` },
                         selectedFields.map((key) =>
                             React.createElement(KeyValue, { k: key, v: server[key] })
                         )
@@ -326,8 +402,8 @@
                     React.createElement(
                         'div',
                         { className: 'grid-container text-sm' },
-                        Object.keys(server)
-                            .filter((key) => titles.hasOwnProperty(key) && !selectedFields.includes(key))
+                        Object.keys(TITLES)
+                            .filter((key) => TITLES.hasOwnProperty(key) && !selectedFields.includes(key))
                             .map((key) =>
                                 React.createElement(KeyValue, {
                                     k: key,
@@ -347,11 +423,12 @@
                         )
                     )
                 ),
-                showTrendModal &&
-                React.createElement(TrendModal, {
+
+
+                showTrendModal && ReactDOM.createPortal(React.createElement(TrendModal, {
                     clientId: server.client_id,
                     onClose: () => setShowTrendModal(false),
-                })
+                }), modalRoot)
             );
         });
 
@@ -373,7 +450,7 @@
             // 从 localStorage 中读取 selectedFields，如果不存在则使用默认值
             const [selectedFields, setSelectedFields] = useState(() => {
                 const savedFields = localStorage.getItem('selectedFields');
-                return savedFields ? JSON.parse(savedFields) : ['client_id', 'cpu_delay', 'disk_delay', 'memoryUsage', 'load_1min'];
+                return savedFields ? JSON.parse(savedFields) : ['hostname', 'loadAverages', 'memoryUsage'];
             });
 
             const prevServersRef = useRef({}); // 存储上一次的服务器数据
@@ -399,13 +476,13 @@
             // 计算 CPU 百分比
             const calculateCpuPercentages = (currentCpu, prevCpu) => {
                 const diff = {
-                    cpu_us: currentCpu.cpu_us - (prevCpu.cpu_us || 0),
-                    cpu_sy: currentCpu.cpu_sy - (prevCpu.cpu_sy || 0),
-                    cpu_ni: currentCpu.cpu_ni - (prevCpu.cpu_ni || 0),
-                    cpu_id: currentCpu.cpu_id - (prevCpu.cpu_id || 0),
-                    cpu_wa: currentCpu.cpu_wa - (prevCpu.cpu_wa || 0),
-                    cpu_hi: currentCpu.cpu_hi - (prevCpu.cpu_hi || 0),
-                    cpu_st: currentCpu.cpu_st - (prevCpu.cpu_st || 0),
+                    cpu_us: currentCpu.cpu_user - (prevCpu.cpu_user || 0),
+                    cpu_sy: currentCpu.cpu_system - (prevCpu.cpu_system || 0),
+                    cpu_ni: currentCpu.cpu_nice - (prevCpu.cpu_nice || 0),
+                    cpu_id: currentCpu.cpu_idle - (prevCpu.cpu_idle || 0),
+                    cpu_wa: currentCpu.cpu_iowait - (prevCpu.cpu_iowait || 0),
+                    cpu_hi: currentCpu.cpu_irq - (prevCpu.cpu_irq || 0),
+                    cpu_st: currentCpu.cpu_steal - (prevCpu.cpu_steal || 0),
                 };
 
                 const total = Object.values(diff).reduce((sum, value) => sum + value, 0);
@@ -436,8 +513,10 @@
 
             // 计算网络流量速度（KB/s）
             const calculateNetworkSpeed = (currentNet, prevNet) => {
-                const diffRx = currentNet.net_rx - (prevNet.net_rx || currentNet.net_rx);
-                const diffTx = currentNet.net_tx - (prevNet.net_tx || currentNet.net_tx);
+                const timeDiff = currentNet.timestamp - prevNet.timestamp;
+
+                const diffRx = currentNet.default_interface_net_rx_bytes - (prevNet.default_interface_net_rx_bytes || currentNet.default_interface_net_rx_bytes);
+                const diffTx = currentNet.default_interface_net_tx_bytes - (prevNet.default_interface_net_tx_bytes || currentNet.default_interface_net_tx_bytes);
 
                 // 如果差值为 0，则返回上一次的值
                 if (diffRx === 0 && diffTx === 0) {
@@ -448,10 +527,39 @@
                 }
 
                 return {
-                    netRxSpeedKB: (diffRx / 1024).toFixed(2), // 转换为 KB/s
-                    netTxSpeedKB: (diffTx / 1024).toFixed(2), // 转换为 KB/s
+                    netRxSpeedKB: (diffRx / 1024 / timeDiff).toFixed(2), // 转换为 KB/s
+                    netTxSpeedKB: (diffTx / 1024 / timeDiff).toFixed(2), // 转换为 KB/s
                 };
             };
+
+            function processIOData(prevData, currentData) {
+                // 计算时间差
+                const timeDiff = currentData.timestamp - prevData.timestamp;
+
+                // 计算I/O速率
+                const readsPerSecond = ((currentData.reads_completed - prevData.reads_completed) / timeDiff).toFixed(2);
+                const writesPerSecond = ((currentData.writes_completed - prevData.writes_completed) / timeDiff).toFixed(2);
+
+                // 计算平均I/O延迟
+                const avgReadLatency = (currentData.reading_ms / currentData.reads_completed).toFixed(2);
+                const avgWriteLatency = (currentData.writing_ms / currentData.writes_completed).toFixed(2);
+
+                // 计算磁盘利用率
+                const diskUtilization = ((currentData.iotime_ms - prevData.iotime_ms) / (timeDiff * 1000000)).toFixed(2);
+
+                // 计算加权I/O时间百分比
+                const weightedIoTimePercent = ((currentData.weighted_io_time / currentData.iotime_ms)).toFixed(2);
+
+                // 返回结果对象
+                return {
+                    readsPerSecond,
+                    writesPerSecond,
+                    avgReadLatency,
+                    avgWriteLatency,
+                    diskUtilization,
+                    weightedIoTimePercent,
+                };
+            }
 
             // Fetch data without depending on expandedStates
             const fetchData = useCallback(async () => {
@@ -472,30 +580,40 @@
                             prevServersRef.current[machineId] = server;
                         }
 
+
                         // 计算 CPU 百分比和网络速度
                         const cpuPercentages = calculateCpuPercentages(server, prevServer);
                         const networkSpeed = calculateNetworkSpeed(server, prevServer);
-                        const uptimeDays = `${Math.floor(server.uptime / 3600 / 24)}`
+                        const uptimeDays = `${Math.floor(server.uptime_s / 3600 / 24)}`
+
+                        // 计算实际使用的内存
+                        server.mem_really_used_mib = (server.mem_total_mib - (server.mem_free_mib + server.mem_buff_cache_mib)).toFixed(2);
+
+                        const PercentageInfo = ({ used, total, unit = 'G' }) => React.createElement('div', { className: 'flex justify-left items-center' },
+                            PercentageCircle({ percentage: (used / total).toFixed(2) }),
+                            React.createElement('span', null, `${(used / 1).toFixed(2)}/${(total / 1).toFixed(2)}${unit}`),
+                        )
                         // 更新 renderServers
                         renderServers.current[machineId] = {
                             ...server,
                             ...cpuPercentages,
                             ...networkSpeed,
-                            formattedTime: formatTime(server.insert_utc_ts),
-                            memoryUsage: memoryUsagePercentage(server.mem_total - (server.mem_free + server.mem_buff_cache), server.mem_total),
-                            memTotalGB: formatGB(server.mem_total * 1024 * 1024), // MiB to GB
-                            memUsedGB: formatGB(server.mem_used * 1024 * 1024), // MiB to GB
-                            memFreeGB: formatGB(server.mem_free * 1024 * 1024), // MiB to GB
-                            memBuffCacheGB: formatGB(server.mem_buff_cache * 1024 * 1024), // MiB to GB
-                            netRxGB: formatGB(server.net_rx),
-                            netTxGB: formatGB(server.net_tx),
-                            disksTotalGB: formatGB(server.disks_total_kb * 1024), // KB to GB
-                            disksAvailGB: formatGB(server.disks_avail_kb * 1024), // KB to GB
-                            isOffline: isOutdated(server.insert_utc_ts),
+                            ...processIOData(prevServer, server),
+
+                            loadAverages: `${server.load_1min}/${server.load_5min}/${server.load_15min}`,
+                            updateAt: formatTime(server.timestamp),
+                            memoryUsage: PercentageInfo({ used: (server.mem_really_used_mib / 1024).toFixed(2), total: (server.mem_total_mib / 1024).toFixed(2) }),
+                            tasksInfo: `${server.running_tasks}/${server.total_tasks}`,
+                            trafficInfo: `${BtoGB(server.default_interface_net_rx_bytes)}/${BtoGB(server.default_interface_net_tx_bytes)}`,
+                            connectionInfo: `${server.tcp_connections}/${server.udp_connections}`,
+                            rootDiskInfo: PercentageInfo({ used: BtoGB(server.root_disk_avail_kb * 1024), total: BtoGB(server.root_disk_total_kb * 1024) }),
+                            isOffline: isOutdated(server.timestamp),
                             uptimeDays: uptimeDays,
                         };
+
                     });
 
+                    // console.log('renderServers',renderServers.current)
                     // 将 renderServers 转换为数组并更新状态
                     setServers(Object.values(renderServers.current));
                 } catch (error) {
@@ -515,11 +633,6 @@
                 dispatch({ type: 'TOGGLE', machineId });
             }, []);
 
-            // Filter outdated servers
-            const filteredServers = useMemo(
-                () => servers.filter(server => !isOutdated(server.insert_utc_ts)),
-                [servers]
-            );
 
             return React.createElement(
                 'div',
@@ -538,7 +651,7 @@
                             className: 'p-3 py-0 cursor-pointer rounded-lg transition-colors flex items-center justify-between text-sm',
                         }, [
                         // server.insert_utc_ts 最近更新时间超过 60 秒视为离线
-                        React.createElement('p', {}, `Online    ${servers.filter(server => !isOutdated(server.insert_utc_ts)).length}/${servers.length}`),
+                        React.createElement('p', {}, `Online    ${servers.filter(server => !isOutdated(server.timestamp)).length}/${servers.length}`),
                         React.createElement(
                             'button',
                             {
@@ -554,7 +667,7 @@
                     ),
                     servers.map(server =>
                         React.createElement(Server, {
-                            k: server.machine_id,
+                            key: server.machine_id,
                             server: server,
                             isExpanded: expandedStates[server.machine_id] || false,
                             onToggleExpand: () => toggleExpand(server.machine_id),

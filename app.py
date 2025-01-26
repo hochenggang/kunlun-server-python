@@ -1,25 +1,28 @@
-import time
+import os
 import logging
 import sqlite3
-from typing import List, Any
+from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException, Form, Response, Query
+from pydantic import BaseModel
+from fastapi import FastAPI, Form, Response, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+# 初始化日志
 
-# 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger(__name__)
 
-# SQLite 数据库文件路径
-DATABASE = "db/kunlun.db"
+logger = logging.getLogger(__name__)
 
 
 # 初始化数据库
+os.makedirs("db", exist_ok=True)
+DATABASE = "db/kunlun_status.db"
+
+
 def init_db():
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
@@ -27,173 +30,96 @@ def init_db():
         cursor.execute("PRAGMA journal_mode=WAL;")
         # 设置 busy_timeout 为 10 秒
         cursor.execute("PRAGMA busy_timeout=10000;")
-        # 创建表，并添加字段备注
+        # 创建 client 表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS client (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                machine_id TEXT NOT NULL UNIQUE,  -- 使用 machine_id 作为唯一性检测
-                name TEXT  -- 客户端名称（未来允许用户更新）
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS status (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_id INTEGER NOT NULL, -- 外键，引用 client 表的 id
-                insert_utc_ts INTEGER NOT NULL, -- 数据插入时间（UTC 时间戳）
-                uptime INTEGER, -- 系统已运行的时间（秒）
-                load_1min REAL, -- 过去 1 分钟的平均负载
-                load_5min REAL, -- 过去 5 分钟的平均负载
-                load_15min REAL, -- 过去 15 分钟的平均负载
-                net_tx INTEGER, -- 默认路由接口的发送流量（字节）
-                net_rx INTEGER, -- 默认路由接口的接收流量（字节）
-                disk_delay INTEGER, -- 磁盘延迟（微秒）
-                cpu_delay INTEGER, -- CPU 延迟（微秒）
-                disks_total_kb INTEGER, -- 磁盘总容量（KB）
-                disks_avail_kb INTEGER, -- 磁盘可用容量（KB）
-                tcp_connections INTEGER, -- TCP 连接数
-                udp_connections INTEGER, -- UDP 连接数
-                cpu_num_cores INTEGER, -- CPU 核心数
-                task_total INTEGER, -- 总任务数
-                task_running INTEGER, -- 正在运行的任务数
-                cpu_us REAL, -- 用户空间占用 CPU 累计统计值
-                cpu_sy REAL, -- 内核空间占用 CPU 累计统计值
-                cpu_ni REAL, -- 用户进程空间内改变过优先级的进程占用 CPU 累计统计值
-                cpu_id REAL, -- 空闲 CPU 累计统计值
-                cpu_wa REAL, -- 等待 I/O 的 CPU 累计统计值
-                cpu_hi REAL, -- 硬件中断占用 CPU 累计统计值
-                cpu_st REAL, -- 虚拟机偷取的 CPU 累计统计值
-                mem_total REAL, -- 总内存大小（MiB）
-                mem_free REAL, -- 空闲内存大小（MiB）
-                mem_used REAL, -- 已用内存大小（MiB）
-                mem_buff_cache REAL, -- 缓存和缓冲区内存大小（MiB）
-                FOREIGN KEY (client_id) REFERENCES client(id) -- 外键约束
-            );
-        """)
-
-        # 创建复合索引
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_client_id_time
-            ON status (client_id, insert_utc_ts)
-        """)
-        conn.commit()
-
-
-def save_client_row(machine_id: str, name: str = None) -> int:
-    """
-    尝试插入 machine_id 并返回 client_id
-    """
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        # 查询已有 id
-        cursor.execute("SELECT id FROM client WHERE machine_id = ?;", (machine_id,))
-        result = cursor.fetchone()
-
-        if result:
-            # 如果记录已存在，返回已有 id
-            return result[0]
-        else:
-            # 如果记录不存在，插入新记录并返回新 id
-            cursor.execute(
-                "INSERT INTO client (machine_id, name) VALUES (?, ?);",
-                (machine_id, name),
+                id INTEGER PRIMARY KEY NOT NULL,
+                machine_id TEXT UNIQUE NOT NULL,
+                hostname TEXT NOT NULL
             )
-            conn.commit()
-            return cursor.lastrowid  # 返回新插入的 id
+        """)
 
-
-def save_status_row(row: List[Any]):
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO status (
-                client_id, insert_utc_ts, uptime, load_1min, load_5min, load_15min,
-                net_tx, net_rx, disk_delay, cpu_delay, disks_total_kb, disks_avail_kb,
-                tcp_connections, udp_connections, cpu_num_cores, task_total, task_running,
-                cpu_us, cpu_sy, cpu_ni, cpu_id, cpu_wa, cpu_hi, cpu_st, mem_total, mem_free, mem_used, mem_buff_cache
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            row,
-        )
+        columns = """
+            timestamp INTEGER NOT NULL,
+            uptime_s INTEGER NOT NULL,
+            load_1min REAL NOT NULL,
+            load_5min REAL NOT NULL,
+            load_15min REAL NOT NULL,
+            running_tasks INTEGER NOT NULL,
+            total_tasks INTEGER NOT NULL,
+            cpu_user REAL NOT NULL,
+            cpu_system REAL NOT NULL,
+            cpu_nice REAL NOT NULL,
+            cpu_idle REAL NOT NULL,
+            cpu_iowait REAL NOT NULL,
+            cpu_irq REAL NOT NULL,
+            cpu_softirq REAL NOT NULL,
+            cpu_steal REAL NOT NULL,
+            mem_total_mib REAL NOT NULL,
+            mem_free_mib REAL NOT NULL,
+            mem_used_mib REAL NOT NULL,
+            mem_buff_cache_mib REAL NOT NULL,
+            tcp_connections INTEGER NOT NULL,
+            udp_connections INTEGER NOT NULL,
+            default_interface_net_rx_bytes INTEGER NOT NULL,
+            default_interface_net_tx_bytes INTEGER NOT NULL,
+            cpu_num_cores INTEGER NOT NULL,
+            cpu_delay_us INTEGER NOT NULL,
+            disk_delay_us INTEGER NOT NULL,
+            root_disk_total_kb INTEGER NOT NULL,
+            root_disk_avail_kb INTEGER NOT NULL,
+            reads_completed INTEGER NOT NULL,
+            writes_completed INTEGER NOT NULL,
+            reading_ms INTEGER NOT NULL,
+            writing_ms INTEGER NOT NULL,
+            iotime_ms INTEGER NOT NULL,
+            ios_in_progress INTEGER NOT NULL,
+            weighted_io_time INTEGER NOT NULL
+        """
+        # 创建 status_latest 表
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS status_latest (
+                client_id INTEGER PRIMARY KEY,
+                {columns},
+                FOREIGN KEY (client_id) REFERENCES client(id)
+            )
+        """)
+        # 创建 status_seconds 表
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS status_seconds (
+                client_id INTEGER NOT NULL,
+                {columns},
+                PRIMARY KEY (client_id, timestamp),
+                FOREIGN KEY (client_id) REFERENCES client(id)
+            )
+        """)
+        # 创建 status_minutes 表
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS status_minutes (
+                client_id INTEGER NOT NULL,
+                {columns},
+                PRIMARY KEY (client_id, timestamp),
+                FOREIGN KEY (client_id) REFERENCES client(id)
+            )
+        """)
+        # 创建 status_hours 表
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS status_hours (
+                client_id INTEGER NOT NULL,
+                {columns},
+                PRIMARY KEY (client_id, timestamp),
+                FOREIGN KEY (client_id) REFERENCES client(id)
+            )
+        """)
         conn.commit()
 
 
-def get_latest_status_data() -> List[sqlite3.Row]:
-    """
-    查询数据库中，以 machine_id 分组的 insert_utc_ts 最新一行数据
-    """
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        cursor.row_factory = sqlite3.Row
-        cursor.execute("""
-            SELECT 
-                c.machine_id, c.name, s.*
-            FROM (
-                SELECT 
-                    *, 
-                    ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY insert_utc_ts DESC) AS rn
-                FROM 
-                    status
-            ) s
-            JOIN 
-                client c ON s.client_id = c.id
-            WHERE 
-                s.rn = 1;
-            """)
-        return cursor.fetchall()
-
-
-def get_history_data(
-    client_id: int, seconds: int, columns: List[str]
-) -> List[List[Any]]:
-    """
-    获取某个 client_id 过去 seconds 秒内的指定列数据记录。
-    如果某个列的数据量大于 60，均匀采样出 60 条数据。
-    """
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        cursor.row_factory = sqlite3.Row
-
-        # 计算时间范围
-        current_time = int(time.time())
-        start_time = current_time - seconds
-
-        # 查询指定时间范围内的数据
-        query = f"""
-            SELECT {", ".join(columns)}, insert_utc_ts
-            FROM status
-            WHERE client_id = ? AND insert_utc_ts >= ?
-            ORDER BY insert_utc_ts ASC;
-        """
-        cursor.execute(query, (client_id, start_time))
-        rows = cursor.fetchall()
-
-        if not rows:
-            return []
-
-        # 将数据按列分组
-        column_data = {col: [] for col in columns}
-        for row in rows:
-            for col in columns:
-                column_data[col].append(row[col])
-
-        # 对每个列的数据进行采样
-        sampled_data = []
-        for col in columns:
-            data = column_data[col]
-            if len(data) > 60:
-                # 均匀采样 60 条数据
-                step = len(data) / 60
-                sampled_data.append([data[int(i * step)] for i in range(60)])
-            else:
-                # 不足 60 条，返回全部数据
-                sampled_data.append(data)
-
-        return sampled_data
+init_db()
 
 
 # 初始化 FastAPI 应用
 app = FastAPI()
+
 
 # 添加 CORS 中间件
 app.add_middleware(
@@ -205,113 +131,443 @@ app.add_middleware(
 )
 
 
-# 全局错误处理器
-@app.exception_handler(Exception)
-async def handle_exception(request: Request, exc: Exception):
+# 定义数据类型
+class KunlunReportLine(BaseModel):
+    client_id: Optional[int] = None
+    timestamp: int
+    uptime_s: int
+    load_1min: float
+    load_5min: float
+    load_15min: float
+    running_tasks: int
+    total_tasks: int
+    cpu_user: float
+    cpu_system: float
+    cpu_nice: float
+    cpu_idle: float
+    cpu_iowait: float
+    cpu_irq: float
+    cpu_softirq: float
+    cpu_steal: float
+    mem_total_mib: float
+    mem_free_mib: float
+    mem_used_mib: float
+    mem_buff_cache_mib: float
+    tcp_connections: int
+    udp_connections: int
+    default_interface_net_rx_bytes: int
+    default_interface_net_tx_bytes: int
+    cpu_num_cores: int
+    cpu_delay_us: int
+    disk_delay_us: int
+    root_disk_total_kb: int
+    root_disk_avail_kb: int
+    reads_completed: int
+    writes_completed: int
+    reading_ms: int
+    writing_ms: int
+    iotime_ms: int
+    ios_in_progress: int
+    weighted_io_time: int
+    machine_id: Optional[str] = None
+    hostname: Optional[str] = "unknown"
+
+
+# 这是需要的字段名称列表
+FIELDS_LIST = [
+    "timestamp",
+    "uptime_s",
+    "load_1min",
+    "load_5min",
+    "load_15min",
+    "running_tasks",
+    "total_tasks",
+    "cpu_user",
+    "cpu_system",
+    "cpu_nice",
+    "cpu_idle",
+    "cpu_iowait",
+    "cpu_irq",
+    "cpu_softirq",
+    "cpu_steal",
+    "mem_total_mib",
+    "mem_free_mib",
+    "mem_used_mib",
+    "mem_buff_cache_mib",
+    "tcp_connections",
+    "udp_connections",
+    "default_interface_net_rx_bytes",
+    "default_interface_net_tx_bytes",
+    "cpu_num_cores",
+    "cpu_delay_us",
+    "disk_delay_us",
+    "root_disk_total_kb",
+    "root_disk_avail_kb",
+    "reads_completed",
+    "writes_completed",
+    "reading_ms",
+    "writing_ms",
+    "iotime_ms",
+    "ios_in_progress",
+    "weighted_io_time",
+    "machine_id",
+    "hostname",
+]
+
+
+# 动态生成 SQL 查询
+def generate_insert_query(table_name: str, fields: list) -> str:
     """
-    捕获所有异常并返回 500 错误
+    生成 INSERT OR REPLACE 查询语句。
+
+    :param table_name: 表名
+    :param fields: 字段列表
+    :return: 生成的 SQL 查询语句
     """
-    logger.error(f"An error occurred: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"error": str(exc)},
+    # 生成字段部分
+    fields_str = ", ".join(fields)
+    # 生成占位符部分
+    placeholders = ", ".join(["?"] * len(fields))
+    # 返回完整的 SQL 查询
+    return f"INSERT OR REPLACE INTO {table_name} ({fields_str}) VALUES ({placeholders})"
+
+
+# 定义路由
+
+
+def db_get_client_id(machine_id: str, hostname: str) -> int:
+    """
+    使用 machine_id 和 hostname 获取 client_id。
+    如果 machine_id 不存在，则插入新记录并返回 client_id。
+    如果 hostname 发生变化，则更新数据库中的 hostname。
+
+    :param machine_id: 客户端的唯一标识
+    :param hostname: 客户端的主机名
+    :return: client_id
+    """
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row  # 将查询结果转换为字典
+
+        # 查询 client 表
+        cursor.execute(
+            "SELECT id, hostname FROM client WHERE machine_id = ?", (machine_id,)
+        )
+        client = cursor.fetchone()
+
+        if client is None:
+            # 如果 machine_id 不存在，插入新记录
+            # 查询当前最大 id
+            cursor.execute("SELECT MAX(id) AS max_id FROM client")
+            max_id_result = cursor.fetchone()
+            new_id = (
+                1 if max_id_result["max_id"] is None else max_id_result["max_id"] + 1
+            )
+
+            # 插入新记录
+            cursor.execute(
+                "INSERT INTO client (id, machine_id, hostname) VALUES (?, ?, ?)",
+                (new_id, machine_id, hostname),
+            )
+            client_id = new_id
+            logger.info(
+                f"New client inserted: machine_id={machine_id}, client_id={client_id}"
+            )
+        else:
+            # 如果 machine_id 存在，检查 hostname 是否需要更新
+            client_id = client["id"]
+            if client["hostname"] != hostname:
+                cursor.execute(
+                    "UPDATE client SET hostname = ? WHERE id = ?",
+                    (hostname, client_id),
+                )
+                logger.info(
+                    f"Hostname updated: client_id={client_id}, new_hostname={hostname}"
+                )
+
+        conn.commit()  # 提交事务
+        return client_id
+
+
+# 辅助函数
+
+
+def hleper_calculate_delta(
+    new_data: KunlunReportLine, last_data: KunlunReportLine
+) -> KunlunReportLine:
+    """
+    计算两个 KunlunReportLine 对象之间的差值。
+
+    :param new_data: 新的数据点
+    :param last_data: 上一个数据点
+    :return: 差值计算结果
+    """
+    delta_data = KunlunReportLine(
+        client_id=new_data.client_id,
+        timestamp=new_data.timestamp,
+        uptime_s=new_data.uptime_s,
+        load_1min=new_data.load_1min,
+        load_5min=new_data.load_5min,
+        load_15min=new_data.load_15min,
+        running_tasks=new_data.running_tasks,
+        total_tasks=new_data.total_tasks,
+        cpu_user=new_data.cpu_user - last_data.cpu_user,
+        cpu_system=new_data.cpu_system - last_data.cpu_system,
+        cpu_nice=new_data.cpu_nice - last_data.cpu_nice,
+        cpu_idle=new_data.cpu_idle - last_data.cpu_idle,
+        cpu_iowait=new_data.cpu_iowait - last_data.cpu_iowait,
+        cpu_irq=new_data.cpu_irq - last_data.cpu_irq,
+        cpu_softirq=new_data.cpu_softirq - last_data.cpu_softirq,
+        cpu_steal=new_data.cpu_steal - last_data.cpu_steal,
+        mem_total_mib=new_data.mem_total_mib,
+        mem_free_mib=new_data.mem_free_mib,
+        mem_used_mib=new_data.mem_used_mib,
+        mem_buff_cache_mib=new_data.mem_buff_cache_mib,
+        tcp_connections=new_data.tcp_connections,
+        udp_connections=new_data.udp_connections,
+        default_interface_net_rx_bytes=new_data.default_interface_net_rx_bytes
+        - last_data.default_interface_net_rx_bytes,
+        default_interface_net_tx_bytes=new_data.default_interface_net_tx_bytes
+        - last_data.default_interface_net_tx_bytes,
+        cpu_num_cores=new_data.cpu_num_cores,
+        cpu_delay_us=new_data.cpu_delay_us,
+        disk_delay_us=new_data.disk_delay_us,
+        root_disk_total_kb=new_data.root_disk_total_kb,
+        root_disk_avail_kb=new_data.root_disk_avail_kb,
+        reads_completed=new_data.reads_completed - last_data.reads_completed,
+        writes_completed=new_data.writes_completed - last_data.writes_completed,
+        reading_ms=new_data.reading_ms - last_data.reading_ms,
+        writing_ms=new_data.writing_ms - last_data.writing_ms,
+        iotime_ms=new_data.iotime_ms - last_data.iotime_ms,
+        ios_in_progress=new_data.ios_in_progress,
+        weighted_io_time=new_data.weighted_io_time - last_data.weighted_io_time,
+        machine_id=new_data.machine_id,
+        hostname=new_data.hostname,
     )
+    return delta_data
 
 
-@app.post("/")
-async def route_post_index_test(request: Request):
-    """
-    测试接收监控数据并返回
-    """
-    # 解析表单数据
-    form_data = await request.form()
-    form_dict = dict(form_data)
-
-    # 返回客户端 IP 和表单数据
-    return {**form_dict}
+# 自定义中间件
+@app.middleware("http")
+async def global_error_handler(request: Request, call_next):
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        return Response(
+            status_code=400,
+            content=f"{str(e)}",
+            media_type="text/plain",
+        )
 
 
 @app.post("/status")
 async def route_post_status(
-    machine_id: str = Form(...),
-    uptime: int = Form(...),
-    load_1min: float = Form(...),
-    load_5min: float = Form(...),
-    load_15min: float = Form(...),
-    net_tx: int = Form(...),
-    net_rx: int = Form(...),
-    disk_delay: int = Form(...),
-    cpu_delay: int = Form(...),
-    disks_total_kb: int = Form(...),
-    disks_avail_kb: int = Form(...),
-    tcp_connections: int = Form(...),
-    udp_connections: int = Form(...),
-    cpu_num_cores: int = Form(...),
-    task_total: int = Form(...),
-    task_running: int = Form(...),
-    cpu_us: float = Form(...),
-    cpu_sy: float = Form(...),
-    cpu_ni: float = Form(...),
-    cpu_id: float = Form(...),
-    cpu_wa: float = Form(...),
-    cpu_hi: float = Form(...),
-    cpu_st: float = Form(...),
-    mem_total: float = Form(...),
-    mem_free: float = Form(...),
-    mem_used: float = Form(...),
-    mem_buff_cache: float = Form(...),
+    values: str = Form(...),
 ):
     """
     接收监控数据并保存到数据库
     """
-    # 获取或创建客户端记录
-    client_id = save_client_row(machine_id)
 
-    try:
-        row = (
-            client_id,
-            round(time.time()),  # insert_utc_ts
-            uptime,
-            load_1min,
-            load_5min,
-            load_15min,
-            net_tx,
-            net_rx,
-            disk_delay,
-            cpu_delay,
-            disks_total_kb,
-            disks_avail_kb,
-            tcp_connections,
-            udp_connections,
-            cpu_num_cores,
-            task_total,
-            task_running,
-            cpu_us,
-            cpu_sy,
-            cpu_ni,
-            cpu_id,
-            cpu_wa,
-            cpu_hi,
-            cpu_st,
-            mem_total,
-            mem_free,
-            mem_used,
-            mem_buff_cache,
+    # 这是客户端传过来的数据
+    values_list = values.split(",")
+
+    # 进行简单校验
+    if len(values_list) != len(FIELDS_LIST):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"required fields {len(FIELDS_LIST)}, recived {len(values_list)} "
+            },
         )
-        # 保存数据到数据库
-        save_status_row(row)
-        return {"status": "ok", "client_id": client_id}
 
-    except Exception as e:
-        logger.warning(f"Failed to save status: {e} machine_id:{machine_id}")
-        # 未来加上黑名单机制，如果提交了异常数据，视为攻击行为
-        raise HTTPException(status_code=400, detail=str(e))
+    kunlun_report_line = KunlunReportLine(
+        **{FIELDS_LIST[i]: values_list[i] for i in range(len(FIELDS_LIST))}
+    )
+    if kunlun_report_line.timestamp % 10 != 0:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"required timestamp must % 10 = 0, recived timestamp {kunlun_report_line.timestamp} % 10 = {kunlun_report_line.timestamp % 10} "
+            },
+        )
 
+    # 获取 client_id
+    client_id = db_get_client_id(
+        kunlun_report_line.machine_id, kunlun_report_line.hostname
+    )
+    kunlun_report_line.client_id = client_id
 
-@app.get("/")
-async def route_get_index():
-    with open("./kunlun.html", "rt", encoding="utf-8") as html:
-        return Response(content=html.read(), media_type="text/html")
+    # 查询前一条最新数据, 为计算差值做准备
+    kunlun_report_line_before = None
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute("SELECT * FROM status_latest WHERE client_id = ?", (client_id,))
+        last_data = cursor.fetchone()
+        if last_data:
+            kunlun_report_line_before = KunlunReportLine(**last_data)
+
+    # 写入最新状态
+    kunlun_report_line_dict = kunlun_report_line.model_dump()
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            generate_insert_query(
+                "status_latest", list(kunlun_report_line_dict.keys())[:-2]
+            ),
+            list(kunlun_report_line_dict.values())[:-2],
+        )
+        conn.commit()
+
+    if not kunlun_report_line_before:
+        return JSONResponse(status_code=200, content={"ok": 1})
+
+    # 如果前一条最新原始数据存在，求取差值并写入十秒级汇总数据
+    kunlun_report_line_delta_10s = hleper_calculate_delta(
+        kunlun_report_line, kunlun_report_line_before
+    )
+    kunlun_report_line_delta_10s_dict = kunlun_report_line_delta_10s.model_dump()
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            generate_insert_query(
+                "status_seconds", list(kunlun_report_line_delta_10s_dict.keys())[:-2]
+            ),
+            list(kunlun_report_line_delta_10s_dict.values())[:-2],
+        )
+
+        # 秒级数据只保留 1小时的数据，合计360条，需要清理超出上限的秒级数据
+        cursor.execute(
+            """
+            DELETE FROM status_seconds
+            WHERE (client_id, timestamp) IN (
+                SELECT client_id, timestamp FROM status_seconds
+                WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 360
+            );
+            """,  # 按时间戳降序，跳过最新360条，删除剩余旧数据
+            (client_id,),
+        )
+        conn.commit()
+
+    # 检查是否为每分钟的开始
+    if kunlun_report_line.timestamp % 60 == 0:
+        # logger.info(
+        #     f"It's the start of a minute, calculating delta... {str(kunlun_report_line)}"
+        # )
+
+        # 汇总秒级数据，生成分钟级数据
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO status_minutes (
+                    client_id, timestamp, uptime_s, load_1min, load_5min, load_15min,
+                    running_tasks, total_tasks, cpu_user, cpu_system, cpu_nice, cpu_idle,
+                    cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
+                    mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
+                    default_interface_net_rx_bytes, default_interface_net_tx_bytes,
+                    cpu_num_cores, cpu_delay_us, disk_delay_us,
+                    root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
+                    reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
+                )
+                SELECT
+                    client_id,
+                    MAX(timestamp),
+                    ROUND(AVG(uptime_s), 2),
+                    ROUND(AVG(load_1min), 2), ROUND(AVG(load_5min), 2), ROUND(AVG(load_15min), 2),
+                    ROUND(AVG(running_tasks), 2), ROUND(AVG(total_tasks), 2),
+                    ROUND(SUM(cpu_user), 2), ROUND(SUM(cpu_system), 2), ROUND(SUM(cpu_nice), 2),
+                    ROUND(SUM(cpu_idle), 2), ROUND(SUM(cpu_iowait), 2), ROUND(SUM(cpu_irq), 2), ROUND(SUM(cpu_softirq), 2), ROUND(SUM(cpu_steal), 2),
+                    ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
+                    ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
+                    SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
+                    ROUND(AVG(cpu_num_cores), 2), ROUND(AVG(cpu_delay_us), 2), ROUND(AVG(disk_delay_us), 2),
+                    ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
+                    SUM(reads_completed), SUM(writes_completed),
+                    SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
+                    ROUND(AVG(ios_in_progress), 2), ROUND(SUM(weighted_io_time), 2)
+                FROM status_seconds
+                WHERE 
+                    client_id = ? 
+                    AND timestamp >= ? - 60
+                GROUP BY client_id;
+            """,
+                (client_id, kunlun_report_line.timestamp),
+            )
+
+            # 清理超出上限的分钟级数据
+            cursor.execute(
+                """
+                DELETE FROM status_minutes
+                WHERE (client_id, timestamp) IN (
+                    SELECT client_id, timestamp FROM status_minutes
+                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1  OFFSET 1440
+                );
+            """,  # 保留最新1440条（24小时）
+                (client_id,),
+            )
+            conn.commit()
+
+    # 检查是否为每小时的开始
+    if kunlun_report_line.timestamp % 3600 == 0:
+        # logger.info(
+        #     f"It's the start of a hour, calculating delta... {str(kunlun_report_line)}"
+        # )
+        # 汇总分钟级数据，生成小时级数据
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO status_hours (
+                    client_id, timestamp, uptime_s, load_1min, load_5min, load_15min,
+                    running_tasks, total_tasks, cpu_user, cpu_system, cpu_nice, cpu_idle,
+                    cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
+                    mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
+                    default_interface_net_rx_bytes, default_interface_net_tx_bytes,
+                    cpu_num_cores, cpu_delay_us, disk_delay_us,
+                    root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
+                    reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
+                )
+                SELECT
+                    client_id,
+                    MAX(timestamp),
+                    ROUND(AVG(uptime_s), 2),
+                    ROUND(AVG(load_1min), 2), ROUND(AVG(load_5min), 2), ROUND(AVG(load_15min), 2),
+                    ROUND(AVG(running_tasks), 2), ROUND(AVG(total_tasks), 2),
+                    ROUND(SUM(cpu_user), 2), ROUND(SUM(cpu_system), 2), ROUND(SUM(cpu_nice), 2),
+                    ROUND(SUM(cpu_idle), 2), ROUND(SUM(cpu_iowait), 2), ROUND(SUM(cpu_irq), 2), ROUND(SUM(cpu_softirq), 2), ROUND(SUM(cpu_steal), 2),
+                    ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
+                    ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
+                    SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
+                    ROUND(AVG(cpu_num_cores), 2), ROUND(AVG(cpu_delay_us), 2), ROUND(AVG(disk_delay_us), 2),
+                    ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
+                    SUM(reads_completed), SUM(writes_completed),
+                    SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
+                    ROUND(AVG(ios_in_progress), 2), ROUND(SUM(weighted_io_time), 2)
+                FROM status_minutes
+                WHERE 
+                    client_id = ? 
+                    AND timestamp >= ? - 3600
+                GROUP BY client_id;
+                """,
+                (client_id, kunlun_report_line.timestamp),
+            )
+
+            # 清理超出上限的小时级数据
+            cursor.execute(
+                """
+                DELETE FROM status_hours
+                WHERE (client_id, timestamp) IN (
+                    SELECT client_id, timestamp FROM status_hours
+                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1  OFFSET 8760
+                );
+            """,  # 保留最新 8760 条（365天）
+                (client_id,),
+            )
+            conn.commit()
+
+    return JSONResponse(status_code=200, content={"ok": 2})
 
 
 @app.get("/status")
@@ -320,40 +576,112 @@ async def route_get_status():
 
 
 @app.get("/status/latest")
-async def route_get_latest_status():
+async def get_status_latest():
     """
-    查询数据库中，以 client_ip 分组的 insert_utc_ts 最新一行数据
+    获取所有客户端的最新状态数据，并包含 machine_id 和 hostname。
+    - 每个客户端只返回最新的一条记录。
     """
-    rows = get_latest_status_data()
-    return [dict(r) for r in rows]
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        # 使用 JOIN 查询 status_latest 和 client 表，并只返回每个客户端的最新一条记录
+        cursor.execute(
+            """
+            SELECT sl.*, c.machine_id, c.hostname
+            FROM status_latest sl
+            JOIN client c ON sl.client_id = c.id
+            WHERE sl.timestamp = (
+                SELECT MAX(timestamp)
+                FROM status_latest
+                WHERE client_id = sl.client_id
+            )
+            """
+        )
+        results = cursor.fetchall()
+        return JSONResponse(content=[dict(row) for row in results])
 
 
-@app.get("/status/{client_id}/history")
-async def route_get_client_history(
-    client_id: int,
-    columns: str = Query(..., description="需要查询的列，以逗号分隔"),
-    seconds: int = Query(..., description="查询过去多少秒的数据"),
-):
+@app.get("/status/seconds")
+async def get_status_seconds(client_id: int, limit: int = 360):
     """
-    获取某个 client_id 过去 seconds 秒内的指定列数据记录。
-    如果某个列的数据量大于 30，均匀采样出 30 条数据。
+    获取整理计算后的 10 秒级数据。
+    - client_id: 客户端 ID
+    - limit: 返回的记录数，默认为 360（1 小时数据）
     """
-    try:
-        # 解析 columns 参数
-        columns_list = [col.strip() for col in columns.split(",")]
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute(
+            "SELECT * FROM status_seconds WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (client_id, limit),
+        )
+        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
 
-        # 获取历史数据
-        history_data = get_history_data(client_id, seconds, columns_list)
 
-        # 返回结果
-        return {"client_id": client_id, "data": history_data}
-    except Exception as e:
-        logger.error(f"Failed to fetch history data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/status/minutes")
+async def get_status_minutes(client_id: int, limit: int = 1440):
+    """
+    获取整理计算后的分钟级数据。
+    - client_id: 客户端 ID
+    - limit: 返回的记录数，默认为 1440（24 小时数据）
+    """
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute(
+            "SELECT * FROM status_minutes WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (client_id, limit),
+        )
+        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+
+
+@app.get("/status/hours")
+async def get_status_hours(client_id: int, limit: int = 8760):
+    """
+    获取整理计算后的小时级数据。
+    - client_id: 客户端 ID
+    - limit: 返回的记录数，默认为 8760（365 天数据）
+    """
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute(
+            "SELECT * FROM status_hours WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (client_id, limit),
+        )
+        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+
+
+
+@app.get("/")
+async def route_get_index():
+    with open("./kunlun.html", "rt", encoding="utf-8") as html:
+        return Response(content=html.read(), media_type="text/html")
+
+
+@app.get("/{p:path}")
+async def not_found_handler(p: str):
+    """
+    兜底页面
+    """
+    return Response(
+        status_code=404,
+        content='''
+        <center style='
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            position: fixed;'>
+            准备中...
+        </center>
+        ''',
+        media_type="text/html",
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    init_db()
     uvicorn.run(app, host="::", port=8008)
