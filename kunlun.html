@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Server Monitoring Dashboard</title>
+    <title>Kunlun Monitoring Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
 
@@ -69,7 +69,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         const { useState, useEffect, useMemo, useCallback, useReducer, useRef } = React;
-        const HOST = 'http://localhost:8008';
+        const HOST = '';
 
 
         // Helper functions
@@ -90,8 +90,8 @@
 
             trafficInfo: ['总流量 (接收/发送)', 'G', '服务器自上次启动以来的网络总流量，包括接收和发送的数据量'],
             connectionInfo: ['连接数 (TCP/UDP)', '', '当前 TCP 和 UDP 连接数'],
-            netTxSpeedKB: ['网速↑', 'K', '当前网络上传速度'],
-            netRxSpeedKB: ['网速↓', 'K', '当前网络下载速度'],
+            netTxSpeedKB: ['上传速度', 'K', '当前网络上传速度'],
+            netRxSpeedKB: ['下载速度', 'K', '当前网络下载速度'],
 
             updateAt: ['更新时间', '', '数据最后更新时间'],
 
@@ -105,10 +105,10 @@
             cpu_hi_percent: ['CPU 硬件中断', '%', '硬件中断占用的 CPU 百分比'],
             cpu_st_percent: ['CPU 被宿主机占用', '%', '虚拟机被宿主机占用的 CPU 百分比'],
 
-            rootDiskInfo: ['根目录', '', '根目录磁盘的使用情况，已用/可用'],
+            rootDiskInfo: ['根目录空间', '', '根目录磁盘的使用情况，已用/可用'],
             disk_delay_us: ['磁盘延迟', 'ms', '根目录磁盘 I/O 操作的延迟时间'],
-            readsPerSecond: ['每秒读取次数', '', '根目录磁盘每秒的读取操作次数'],
-            writesPerSecond: ['每秒写入次数', '', '根目录磁盘每秒的写入操作次数'],
+            readsPerSecond: ['读取次数', '', '根目录磁盘采样周期内的读取操作次数'],
+            writesPerSecond: ['写入次数', '', '根目录磁盘采样周期内的写入操作次数'],
             avgReadLatency: ['平均读取延迟', 'ms', '根目录磁盘读取操作的平均延迟时间'],
             avgWriteLatency: ['平均写入延迟', 'ms', '根目录磁盘写入操作的平均延迟时间'],
             diskUtilization: ['磁盘利用率', '%', '根目录磁盘的使用率百分比'],
@@ -154,6 +154,22 @@
         }
 
 
+        function calculateAndNormalizeKeys(obj, keys) {
+            // 1. 计算 keys 列表中所有键的值的总和
+            const total = keys.reduce((sum, key) => sum + (obj[key] || 0), 0);
+
+            // 2. 遍历 keys 列表，将每个键的值除以总和，并保留两位小数
+            keys.forEach(key => {
+                if (obj[key] !== undefined) { // 确保键存在
+                    obj[key] = parseFloat(((obj[key] / total) * 100).toFixed(2));
+                }
+            });
+
+            // 3. 返回处理后的对象
+            return obj;
+        }
+
+
         const TrendModal = ({ clientId, onClose }) => {
 
             const [apiData, setApiData] = useState(null);
@@ -164,10 +180,48 @@
 
             // 数据级别选项
             const dataLevelOptions = [
-                { value: 'seconds', label: '最近一小时' },
-                { value: 'minutes', label: '最近一天' },
-                { value: 'hours', label: '最近一年' },
+                { value: 'seconds', label: '最近一小时', title: '10秒递进' },
+                { value: 'minutes', label: '最近一天', title: '60秒递进' },
+                { value: 'hours', label: '最近一年', title: '60分钟递进' },
             ];
+
+
+            const apiObjectKeys = {
+                uptime_s: ["运行时间", "秒", "系统运行的总时间（秒）"],
+                load_1min: ["1分钟负载", "", "过去1分钟的系统平均负载"],
+                load_5min: ["5分钟负载", "", "过去5分钟的系统平均负载"],
+                load_15min: ["15分钟负载", "", "过去15分钟的系统平均负载"],
+                running_tasks: ["运行任务数", "", "当前正在运行的任务数量"],
+                total_tasks: ["总任务数", "", "系统中总的任务数量"],
+                cpu_user: ["CPU 用户占用", "%", "用户空间占用的CPU百分比"],
+                cpu_system: ["CPU 系统占用", "%", "内核空间占用的CPU百分比"],
+                cpu_nice: ["CPU 低优先级", "%", "低优先级进程占用的CPU百分比"],
+                cpu_idle: ["CPU 空闲", "%", "CPU空闲时间的百分比"],
+                cpu_iowait: ["CPU IO等待", "%", "CPU等待IO操作的时间百分比"],
+                cpu_irq: ["CPU 硬件中断", "%", "CPU处理硬中断的时间百分比"],
+                cpu_softirq: ["CPU 软件中断", "%", "CPU处理软中断的时间百分比"],
+                cpu_steal: ["CPU 被宿主机占用", "%", "虚拟CPU等待物理CPU的时间百分比"],
+                mem_total_mib: ["总内存", "MiB", "系统总内存大小（MiB）"],
+                mem_free_mib: ["空闲内存", "MiB", "系统空闲内存大小（MiB）"],
+                mem_used_mib: ["已用内存", "MiB", "系统已用内存大小（MiB）"],
+                mem_buff_cache_mib: ["缓存内存", "MiB", "用于缓存和缓冲的内存大小（MiB）"],
+                tcp_connections: ["TCP连接数", "个", "当前TCP连接数量"],
+                udp_connections: ["UDP连接数", "个", "当前UDP连接数量"],
+                default_interface_net_rx_bytes: ["默认接口接收字节", "Bit", "默认网络接口接收的总字节数"],
+                default_interface_net_tx_bytes: ["默认接口发送字节", "Bit", "默认网络接口发送的总字节数"],
+                cpu_num_cores: ["CPU核心数", "", "CPU的核心数量"],
+                cpu_delay_us: ["CPU延迟", "μs", "CPU任务的延迟时间（微秒）"],
+                disk_delay_us: ["磁盘延迟", "ms", "磁盘IO操作的延迟时间（毫秒）"],
+                root_disk_total_kb: ["根目录总大小", "KB", "根磁盘的总容量（KB）"],
+                root_disk_avail_kb: ["根目录可用大小", "KB", "根磁盘的可用容量（KB）"],
+                reads_completed: ["读取完成次数", "", "磁盘读取操作完成的次数"],
+                writes_completed: ["写入完成次数", "", "磁盘写入操作完成的次数"],
+                reading_ms: ["读取时间", "ms", "磁盘读取操作的总时间（毫秒）"],
+                writing_ms: ["写入时间", "ms", "磁盘写入操作的总时间（毫秒）"],
+                iotime_ms: ["IO时间", "ms", "磁盘IO操作的总时间（毫秒）"],
+                ios_in_progress: ["进行中的IO操作", "", "当前正在进行的磁盘IO操作数量"],
+                weighted_io_time: ["加权IO时间", "ms", "加权后的磁盘IO操作时间（毫秒）"],
+            };
 
             // 获取历史数据
             const fetchHistoryData = useCallback(async () => {
@@ -178,16 +232,24 @@
                     });
 
                     const data = response.data.reverse()
+                    // 把CPU相关的8个变量转为百分比表达
+                    data.map((item) => calculateAndNormalizeKeys(item, ["cpu_user", "cpu_system", "cpu_nice", "cpu_idle", "cpu_iowait", "cpu_irq", "cpu_softirq", "cpu_steal"]))
+
+
+
                     setApiData(data)
 
                     if (data && data.length > 0) {
-                        console.log(data, '请求成功')
                         // 提取可用的 key 列表（排除 client_id 和 timestamp）
                         const keys = Object.keys(data[0]).filter(
-                            (key) => key !== 'client_id' && key !== 'timestamp'
+                            (key) => key !== 'client_id' && key !== 'timestamp' && apiObjectKeys.hasOwnProperty(key)
                         );
                         setAvailableKeys(keys); // 设置可选的 key 列表
-                        setSelectedKeys(['load_1min'])
+                        if (!selectedKeys) {
+                            setSelectedKeys(['load_1min'])
+                        } else {
+                            setSelectedKeys(JSON.parse(JSON.stringify(selectedKeys)))
+                        }
                     }
 
 
@@ -219,17 +281,31 @@
                 console.log('更新表格数据')
                 if (apiData && apiData.length > 0) {
 
+
+                    function formatTimestamp(timestamp) {
+                        const now = Date.now(); // 当前时间戳（毫秒）
+                        const targetTime = timestamp; // 将秒级时间戳转换为毫秒
+                        const diff = now - targetTime; // 时间差（毫秒）
+
+                        const seconds = (diff / 1000).toFixed(1); // 转换为秒
+                        const minutes = (seconds / 60).toFixed(1); // 转换为分钟
+                        const hours = (minutes / 60).toFixed(1); // 转换为小时
+                        const days = (hours / 24).toFixed(1); // 转换为天
+
+                        if (seconds < 3600) {
+                            // 距离现在小于1小时，格式化为 *s
+                            return `-${seconds}s`;
+                        } else if (hours < 24) {
+                            // 距离现在1-24小时，格式化为 *h
+                            return `-${hours}h`;
+                        } else {
+                            // 距离现在超过24小时，格式化为 *d
+                            return `-${days}d`;
+                        }
+                    }
+
                     // 处理数据，生成 Chart.js 所需的格式
-                    const labels = apiData.map((item) =>
-                        new Date(item.timestamp * 1000).toLocaleString('zh-CN', {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                        })
-                    );
+                    const labels = apiData.map((item) => formatTimestamp(item.timestamp * 1000));
 
                     const CHART_COLORS = {
                         red: 'rgba(255, 99, 132, 0.8)',
@@ -258,6 +334,7 @@
             // 渲染图表
             useEffect(() => {
                 if (chartData) {
+                    console.log(chartData, apiObjectKeys[chartData['datasets'][0].label][0])
                     const ctx = document.getElementById('trendChart').getContext('2d');
 
                     const chart = new Chart(ctx, {
@@ -279,7 +356,21 @@
                                     ticks: {
                                         maxTicksLimit: 5,
                                         font: { size: 10 },
-                                        callback: (value) => (value > 10 ? (value > 1000 ? value.toFixed(0).toLocaleString() : value.toFixed(0)) : value.toFixed(2)),
+                                        callback: (value) => {
+                                            const unit = apiObjectKeys[chartData['datasets'][0].label][1]
+                                            let tempValue = 0
+                                            if (value > 10) {
+                                                if (value > 1000) {
+                                                    tempValue = Number(value.toFixed(0)).toLocaleString()
+                                                }
+                                                else {
+                                                    tempValue = value.toFixed(0)
+                                                }
+                                            } else {
+                                                tempValue = value.toFixed(2)
+                                            }
+                                            return `${tempValue}${unit}`
+                                        },
                                     },
                                     grid: { display: true, drawBorder: false },
                                 },
@@ -300,11 +391,11 @@
                 { className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4' },
                 React.createElement(
                     'div',
-                    { className: 'bg-white rounded-lg p-6 w-full max-w-4xl' },
+                    { className: 'bg-white rounded-lg p-2 py-4 w-full max-w-4xl' },
                     React.createElement(
                         'div',
-                        { className: 'flex justify-between items-center mb-4' },
-                        React.createElement('h2', { className: 'text-sm font-bold' }, '统计'),
+                        { className: 'flex justify-between items-center mb-4 ' },
+                        React.createElement('h2', { className: 'text-sm font-bold' }, '统计数据'),
                         React.createElement(
                             'button',
                             { onClick: onClose, className: 'text-sm text-gray-500 hover:text-gray-700' },
@@ -326,7 +417,7 @@
                                     className: 'text-sm w-full p-2 border rounded',
                                 },
                                 dataLevelOptions.map((option) =>
-                                    React.createElement('option', { key: option.value, value: option.value }, option.label)
+                                    React.createElement('option', { key: option.value, value: option.value, title: option.title }, option.label)
                                 )
                             )
                         ),
@@ -344,7 +435,7 @@
                                     className: 'text-sm w-full p-2 border rounded',
                                 },
                                 availableKeys.map((key) =>
-                                    React.createElement('option', { key: key, value: key }, key)
+                                    React.createElement('option', { key: key, value: key, title: apiObjectKeys[key][2] }, apiObjectKeys[key][0])
                                 )
                             )
                         )
@@ -418,7 +509,7 @@
                                     onClick: () => setShowTrendModal(true),
                                     className: 'operate-button',
                                 },
-                                '统计数据'
+                                '统计'
                             )
                         )
                     )
@@ -569,6 +660,11 @@
 
                     // 遍历新数据，更新 renderServers
                     newServers.forEach(server => {
+
+                        // 现在此次计算实际使用的内存
+                        server.mem_really_used_mib = (server.mem_total_mib - (server.mem_free_mib + server.mem_buff_cache_mib)).toFixed(2);
+
+                        // 准备缓存字段
                         const machineId = server.machine_id;
                         const prevServer = prevServersRef.current[machineId] || {};
                         const renderServer = renderServers.current[machineId] || {};
@@ -586,9 +682,7 @@
                         const networkSpeed = calculateNetworkSpeed(server, prevServer);
                         const uptimeDays = `${Math.floor(server.uptime_s / 3600 / 24)}`
 
-                        // 计算实际使用的内存
-                        server.mem_really_used_mib = (server.mem_total_mib - (server.mem_free_mib + server.mem_buff_cache_mib)).toFixed(2);
-
+                        
                         const PercentageInfo = ({ used, total, unit = 'G' }) => React.createElement('div', { className: 'flex justify-left items-center' },
                             PercentageCircle({ percentage: (used / total).toFixed(2) }),
                             React.createElement('span', null, `${(used / 1).toFixed(2)}/${(total / 1).toFixed(2)}${unit}`),
@@ -687,9 +781,9 @@
                             React.createElement('div', { className: 'py-2 ' }, '选择优先显示字段'),
                             React.createElement(
                                 'div',
-                                { className: 'grid grid-cols-3 gap-4' },
+                                { className: 'grid grid-cols-3 gap-2 p-2' },
 
-                                Object.keys(titles).map((key) =>
+                                Object.keys(TITLES).map((key) =>
                                     React.createElement(
                                         'label',
                                         { key, className: 'flex items-center text-gray-400 text-xs' },
@@ -698,7 +792,7 @@
                                             checked: selectedFields.includes(key),
                                             onChange: () => handleFieldSelection(key),
                                         }),
-                                        React.createElement('span', { className: 'ml-2' }, titles[key])
+                                        React.createElement('span', { className: 'ml-2' }, TITLES[key][0])
                                     )
                                 )
                             )
