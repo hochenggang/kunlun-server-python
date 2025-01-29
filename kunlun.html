@@ -155,6 +155,8 @@
 
 
         function calculateAndNormalizeKeys(obj, keys) {
+            // 对累计求和占比类字段进行求出分别百分比，例如 CPU 统计信息
+
             // 1. 计算 keys 列表中所有键的值的总和
             const total = keys.reduce((sum, key) => sum + (obj[key] || 0), 0);
 
@@ -169,6 +171,13 @@
             return obj;
         }
 
+
+        function calculateUsedMemParcent(obj) {
+            // 为统计行添加内存实际使用量和占比字段
+            obj.mem_really_used_mib = (obj.mem_total_mib - (obj.mem_free_mib + obj.mem_buff_cache_mib)).toFixed(2);
+            obj.mem_used_total_percent = (obj.mem_really_used_mib / obj.mem_total_mib * 100).toFixed(2);
+            return obj;
+        }
 
         const TrendModal = ({ clientId, onClose }) => {
 
@@ -188,39 +197,47 @@
 
             const apiObjectKeys = {
                 uptime_s: ["运行时间", "秒", "系统运行的总时间（秒）"],
-                load_1min: ["1分钟负载", "", "过去1分钟的系统平均负载"],
-                load_5min: ["5分钟负载", "", "过去5分钟的系统平均负载"],
-                load_15min: ["15分钟负载", "", "过去15分钟的系统平均负载"],
-                running_tasks: ["运行任务数", "", "当前正在运行的任务数量"],
-                total_tasks: ["总任务数", "", "系统中总的任务数量"],
-                cpu_user: ["CPU 用户占用", "%", "用户空间占用的CPU百分比"],
-                cpu_system: ["CPU 系统占用", "%", "内核空间占用的CPU百分比"],
-                cpu_nice: ["CPU 低优先级", "%", "低优先级进程占用的CPU百分比"],
-                cpu_idle: ["CPU 空闲", "%", "CPU空闲时间的百分比"],
-                cpu_iowait: ["CPU IO等待", "%", "CPU等待IO操作的时间百分比"],
-                cpu_irq: ["CPU 硬件中断", "%", "CPU处理硬中断的时间百分比"],
-                cpu_softirq: ["CPU 软件中断", "%", "CPU处理软中断的时间百分比"],
-                cpu_steal: ["CPU 被宿主机占用", "%", "虚拟CPU等待物理CPU的时间百分比"],
-                mem_total_mib: ["总内存", "MiB", "系统总内存大小（MiB）"],
-                mem_free_mib: ["空闲内存", "MiB", "系统空闲内存大小（MiB）"],
-                mem_used_mib: ["已用内存", "MiB", "系统已用内存大小（MiB）"],
-                mem_buff_cache_mib: ["缓存内存", "MiB", "用于缓存和缓冲的内存大小（MiB）"],
-                tcp_connections: ["TCP连接数", "个", "当前TCP连接数量"],
-                udp_connections: ["UDP连接数", "个", "当前UDP连接数量"],
-                default_interface_net_rx_bytes: ["默认接口接收字节", "Bit", "默认网络接口接收的总字节数"],
-                default_interface_net_tx_bytes: ["默认接口发送字节", "Bit", "默认网络接口发送的总字节数"],
-                cpu_num_cores: ["CPU核心数", "", "CPU的核心数量"],
-                cpu_delay_us: ["CPU延迟", "μs", "CPU任务的延迟时间（微秒）"],
-                disk_delay_us: ["磁盘延迟", "ms", "磁盘IO操作的延迟时间（毫秒）"],
-                root_disk_total_kb: ["根目录总大小", "KB", "根磁盘的总容量（KB）"],
-                root_disk_avail_kb: ["根目录可用大小", "KB", "根磁盘的可用容量（KB）"],
-                reads_completed: ["读取完成次数", "", "磁盘读取操作完成的次数"],
-                writes_completed: ["写入完成次数", "", "磁盘写入操作完成的次数"],
-                reading_ms: ["读取时间", "ms", "磁盘读取操作的总时间（毫秒）"],
-                writing_ms: ["写入时间", "ms", "磁盘写入操作的总时间（毫秒）"],
-                iotime_ms: ["IO时间", "ms", "磁盘IO操作的总时间（毫秒）"],
-                ios_in_progress: ["进行中的IO操作", "", "当前正在进行的磁盘IO操作数量"],
-                weighted_io_time: ["加权IO时间", "ms", "加权后的磁盘IO操作时间（毫秒）"],
+                load_1min: ["负载-1分钟", "", "过去1分钟的系统平均负载"],
+                load_5min: ["负载-5分钟负载", "", "过去5分钟的系统平均负载"],
+                load_15min: ["负载-15分钟负载", "", "过去15分钟的系统平均负载"],
+
+                running_tasks: ["任务数-正在进行", "", "当前正在运行的任务数量"],
+                total_tasks: ["任务数-全部", "", "系统中总的任务数量"],
+
+                cpu_num_cores: ["CPU-核心数", "", "CPU的核心数量"],
+                cpu_delay_us: ["CPU-延迟", "μs", "CPU任务的延迟时间（微秒）"],
+                cpu_user: ["CPU-用户占用", "%", "用户空间占用的CPU百分比"],
+                cpu_system: ["CPU-系统占用", "%", "内核空间占用的CPU百分比"],
+                cpu_nice: ["CPU-低优先级", "%", "低优先级进程占用的CPU百分比"],
+                cpu_idle: ["CPU-空闲", "%", "CPU空闲时间的百分比"],
+                cpu_iowait: ["CPU-IO等待", "%", "CPU等待IO操作的时间百分比"],
+                cpu_irq: ["CPU-硬件中断", "%", "CPU处理硬中断的时间百分比"],
+                cpu_softirq: ["CPU-软件中断", "%", "CPU处理软中断的时间百分比"],
+                cpu_steal: ["CPU-被宿主机占用", "%", "虚拟CPU等待物理CPU的时间百分比"],
+
+                mem_really_used_mib: ["内存-真实已用", "Mib", "减去缓存和缓冲的内存占用大小（MiB）"],
+                mem_used_total_percent: ["内存-已用占比", "%", "真实内存使用量占比"],
+                mem_total_mib: ["内存-全部", "MiB", "系统总内存大小（MiB）"],
+                mem_free_mib: ["内存-空闲", "MiB", "系统空闲内存大小（MiB）"],
+                mem_used_mib: ["内存-已用", "MiB", "系统已用内存大小（MiB）"],
+                mem_buff_cache_mib: ["内存-缓存", "MiB", "用于缓存和缓冲的内存大小（MiB）"],
+
+                tcp_connections: ["连接数-TCP", "个", "当前TCP连接数量"],
+                udp_connections: ["连接数-UDP", "个", "当前UDP连接数量"],
+
+                default_interface_net_rx_bytes: ["流量-下载速度", "Bit", "当前开机期间默认网络接口接收的总字节数"],
+                default_interface_net_tx_bytes: ["流量-上传速度", "Bit", "当前开机期间默认网络接口发送的总字节数"],
+
+                disk_delay_us: ["磁盘-延迟", "ms", "磁盘IO操作的延迟时间（毫秒）"],
+                root_disk_total_kb: ["磁盘-根目录总空间", "KB", "根磁盘的总容量（KB）"],
+                root_disk_avail_kb: ["磁盘-根目录可用空间", "KB", "根磁盘的可用容量（KB）"],
+                reads_completed: ["磁盘-读取完成次数", "", "磁盘读取操作完成的次数"],
+                writes_completed: ["磁盘-写入完成次数", "", "磁盘写入操作完成的次数"],
+                reading_ms: ["磁盘-读取时间", "ms", "磁盘读取操作的总时间（毫秒）"],
+                writing_ms: ["磁盘-写入时间", "ms", "磁盘写入操作的总时间（毫秒）"],
+                iotime_ms: ["磁盘-IO时间", "ms", "磁盘IO操作的总时间（毫秒）"],
+                ios_in_progress: ["磁盘-进行中的IO操作", "", "当前正在进行的磁盘IO操作数量"],
+                weighted_io_time: ["磁盘-加权IO时间", "ms", "加权后的磁盘IO操作时间（毫秒）"],
             };
 
             // 获取历史数据
@@ -234,8 +251,7 @@
                     const data = response.data.reverse()
                     // 把CPU相关的8个变量转为百分比表达
                     data.map((item) => calculateAndNormalizeKeys(item, ["cpu_user", "cpu_system", "cpu_nice", "cpu_idle", "cpu_iowait", "cpu_irq", "cpu_softirq", "cpu_steal"]))
-
-
+                    data.map((item) => calculateUsedMemParcent(item))
 
                     setApiData(data)
 
@@ -682,7 +698,7 @@
                         const networkSpeed = calculateNetworkSpeed(server, prevServer);
                         const uptimeDays = `${Math.floor(server.uptime_s / 3600 / 24)}`
 
-                        
+
                         const PercentageInfo = ({ used, total, unit = 'G' }) => React.createElement('div', { className: 'flex justify-left items-center' },
                             PercentageCircle({ percentage: (used / total).toFixed(2) }),
                             React.createElement('span', null, `${(used / 1).toFixed(2)}/${(total / 1).toFixed(2)}${unit}`),
