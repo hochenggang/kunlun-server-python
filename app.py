@@ -674,7 +674,7 @@ async def not_found_handler(p: str):
             width: 100%;
             height: 100%;
             position: fixed;'>
-            准备中...
+            404 Not Found
         </center>
         ''',
         media_type="text/html",
@@ -684,4 +684,4 @@ async def not_found_handler(p: str):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="::", port=8008)
+    uvicorn.run(app, host="::", port=8008, log_level='error')
