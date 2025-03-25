@@ -51,9 +51,9 @@ Kunlun Server Monitoring 由以下组件组成：
 #### 使用 Docker 拉取镜像部署 （更快捷）
 
 ```bash
-docker pull hochenggang/kunlun-server:0.1.0
+docker pull hochenggang/kunlun-server:0.1.1
 mkdir -p /opt/kunlun-server/db
-docker run -d --network host -v /opt/kunlun-server/db:/app/db -p 8008:8008 hochenggang/kunlun-server:0.1.0
+docker run -d --network host -v /opt/kunlun-server/db:/app/db -p 8008:8008 hochenggang/kunlun-server:0.1.1
 
 ```
 
@@ -76,8 +76,8 @@ cd kunlun-server-python
 
 ```bash
 mkdir -p /opt/kunlun-server/db
-docker build -t kunlun-server:0.1.0 .
-docker run -d --network host -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server:0.1.0
+docker build -t kunlun-server:0.1.1 .
+docker run -d --network host -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server:0.1.1
 ```
 
 

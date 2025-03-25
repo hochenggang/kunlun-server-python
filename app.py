@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from fastapi import FastAPI, Form, Response, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import requests
 
 # 初始化日志
 
@@ -234,7 +235,6 @@ def generate_insert_query(table_name: str, fields: list) -> str:
 
 # 定义路由
 
-
 def db_get_client_id(machine_id: str, hostname: str) -> int:
     """
     使用 machine_id 和 hostname 获取 client_id。
@@ -290,7 +290,6 @@ def db_get_client_id(machine_id: str, hostname: str) -> int:
 
 
 # 辅助函数
-
 
 def hleper_calculate_delta(
     new_data: KunlunReportLine, last_data: KunlunReportLine
@@ -652,11 +651,15 @@ async def get_status_hours(client_id: int, limit: int = 8760):
         return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
 
 
-
+KV = {}
 @app.get("/")
 async def route_get_index():
-    with open("./kunlun.html", "rt", encoding="utf-8") as html:
-        return Response(content=html.read(), media_type="text/html")
+    key = 'index.html'
+    if key not in KV:
+        resp = requests.get("https://raw.githubusercontent.com/hochenggang/kunlun-frontend/refs/heads/main/dist/index.html")
+        KV[key] = resp.content
+    
+    return Response(content=KV[key], media_type="text/html")
 
 
 @app.get("/{p:path}")
@@ -684,4 +687,4 @@ async def not_found_handler(p: str):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="::", port=8008, log_level='error')
+    uvicorn.run(app, host="0.0.0.0", port=8008, log_level='error')
