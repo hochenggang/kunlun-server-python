@@ -4,7 +4,7 @@ import sqlite3
 from typing import Optional
 
 from pydantic import BaseModel
-from fastapi import FastAPI, Form, Response, Request
+from fastapi import FastAPI, Form, Response, Request, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -35,8 +35,12 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS client (
                 id INTEGER PRIMARY KEY NOT NULL,
+                ip TEXT,
                 machine_id TEXT UNIQUE NOT NULL,
-                hostname TEXT NOT NULL
+                hostname TEXT NOT NULL,
+                status INTEGER NOT NULL DEFAULT 0,
+                last_update INTEGER NOT NULL,
+                create_ts INTEGER NOT NULL
             )
         """)
 
@@ -65,8 +69,6 @@ def init_db():
             default_interface_net_rx_bytes INTEGER NOT NULL,
             default_interface_net_tx_bytes INTEGER NOT NULL,
             cpu_num_cores INTEGER NOT NULL,
-            cpu_delay_us INTEGER NOT NULL,
-            disk_delay_us INTEGER NOT NULL,
             root_disk_total_kb INTEGER NOT NULL,
             root_disk_avail_kb INTEGER NOT NULL,
             reads_completed INTEGER NOT NULL,
@@ -114,6 +116,16 @@ def init_db():
         """)
         conn.commit()
 
+        cursor.execute("PRAGMA table_info(client)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'status' not in columns:
+            cursor.execute("ALTER TABLE client ADD COLUMN status INTEGER NOT NULL DEFAULT 0")
+        if 'last_update' not in columns:
+            cursor.execute("ALTER TABLE client ADD COLUMN last_update INTEGER NOT NULL DEFAULT 0")
+        if 'ip' not in columns:
+            cursor.execute("ALTER TABLE client ADD COLUMN ip TEXT")
+        conn.commit()
+
 
 init_db()
 
@@ -159,8 +171,6 @@ class KunlunReportLine(BaseModel):
     default_interface_net_rx_bytes: int
     default_interface_net_tx_bytes: int
     cpu_num_cores: int
-    cpu_delay_us: int
-    disk_delay_us: int
     root_disk_total_kb: int
     root_disk_avail_kb: int
     reads_completed: int
@@ -200,8 +210,6 @@ FIELDS_LIST = [
     "default_interface_net_rx_bytes",
     "default_interface_net_tx_bytes",
     "cpu_num_cores",
-    "cpu_delay_us",
-    "disk_delay_us",
     "root_disk_total_kb",
     "root_disk_avail_kb",
     "reads_completed",
@@ -235,58 +243,65 @@ def generate_insert_query(table_name: str, fields: list) -> str:
 
 # 定义路由
 
-def db_get_client_id(machine_id: str, hostname: str) -> int:
+import time
+
+def db_get_client_id(machine_id: str, hostname: str, client_ip: str) -> tuple[int, int]:
     """
-    使用 machine_id 和 hostname 获取 client_id。
-    如果 machine_id 不存在，则插入新记录并返回 client_id。
+    使用 machine_id 和 hostname 获取 client_id 和 status。
+    如果 machine_id 不存在，则插入新记录（status=0）并返回 client_id 和 status。
     如果 hostname 发生变化，则更新数据库中的 hostname。
+    每次请求更新 ip 和 last_update。
 
     :param machine_id: 客户端的唯一标识
     :param hostname: 客户端的主机名
-    :return: client_id
+    :param client_ip: 客户端的 IP 地址
+    :return: (client_id, status)
     """
+    current_ts = int(time.time())
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
-        cursor.row_factory = sqlite3.Row  # 将查询结果转换为字典
+        cursor.row_factory = sqlite3.Row
 
-        # 查询 client 表
         cursor.execute(
-            "SELECT id, hostname FROM client WHERE machine_id = ?", (machine_id,)
+            "SELECT id, hostname, status FROM client WHERE machine_id = ?", (machine_id,)
         )
         client = cursor.fetchone()
 
         if client is None:
-            # 如果 machine_id 不存在，插入新记录
-            # 查询当前最大 id
             cursor.execute("SELECT MAX(id) AS max_id FROM client")
             max_id_result = cursor.fetchone()
             new_id = (
                 1 if max_id_result["max_id"] is None else max_id_result["max_id"] + 1
             )
 
-            # 插入新记录
             cursor.execute(
-                "INSERT INTO client (id, machine_id, hostname) VALUES (?, ?, ?)",
-                (new_id, machine_id, hostname),
+                "INSERT INTO client (id, machine_id, hostname, status, ip, last_update, create_ts) VALUES (?, ?, ?, 0, ?, ?, ?)",
+                (new_id, machine_id, hostname, client_ip, current_ts, current_ts),
             )
             client_id = new_id
+            status = 0
             logger.info(
-                f"New client inserted: machine_id={machine_id}, client_id={client_id}"
+                f"New client inserted: machine_id={machine_id}, client_id={client_id}, status=0"
             )
         else:
-            # 如果 machine_id 存在，检查 hostname 是否需要更新
             client_id = client["id"]
+            status = client["status"]
             if client["hostname"] != hostname:
                 cursor.execute(
-                    "UPDATE client SET hostname = ? WHERE id = ?",
-                    (hostname, client_id),
+                    "UPDATE client SET hostname = ?, ip = ?, last_update = ? WHERE id = ?",
+                    (hostname, client_ip, current_ts, client_id),
                 )
                 logger.info(
                     f"Hostname updated: client_id={client_id}, new_hostname={hostname}"
                 )
+            else:
+                cursor.execute(
+                    "UPDATE client SET ip = ?, last_update = ? WHERE id = ?",
+                    (client_ip, current_ts, client_id),
+                )
 
-        conn.commit()  # 提交事务
-        return client_id
+        conn.commit()
+        return client_id, status
 
 
 # 辅助函数
@@ -329,8 +344,6 @@ def hleper_calculate_delta(
         default_interface_net_tx_bytes=new_data.default_interface_net_tx_bytes
         - last_data.default_interface_net_tx_bytes,
         cpu_num_cores=new_data.cpu_num_cores,
-        cpu_delay_us=new_data.cpu_delay_us,
-        disk_delay_us=new_data.disk_delay_us,
         root_disk_total_kb=new_data.root_disk_total_kb,
         root_disk_avail_kb=new_data.root_disk_avail_kb,
         reads_completed=new_data.reads_completed - last_data.reads_completed,
@@ -362,16 +375,15 @@ async def global_error_handler(request: Request, call_next):
 
 @app.post("/status")
 async def route_post_status(
+    request: Request,
     values: str = Form(...),
 ):
     """
     接收监控数据并保存到数据库
     """
 
-    # 这是客户端传过来的数据
     values_list = values.split(",")
 
-    # 进行简单校验
     if len(values_list) != len(FIELDS_LIST):
         return JSONResponse(
             status_code=400,
@@ -391,11 +403,17 @@ async def route_post_status(
             },
         )
 
-    # 获取 client_id
-    client_id = db_get_client_id(
-        kunlun_report_line.machine_id, kunlun_report_line.hostname
+    client_ip = request.client.host if request.client else "unknown"
+    client_id, client_status = db_get_client_id(
+        kunlun_report_line.machine_id, kunlun_report_line.hostname, client_ip
     )
     kunlun_report_line.client_id = client_id
+
+    if client_status != 1:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "client not approved, status=0, waiting for admin approval"},
+        )
 
     # 查询前一条最新数据, 为计算差值做准备
     kunlun_report_line_before = None
@@ -466,7 +484,7 @@ async def route_post_status(
                     cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
                     mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
                     default_interface_net_rx_bytes, default_interface_net_tx_bytes,
-                    cpu_num_cores, cpu_delay_us, disk_delay_us,
+                    cpu_num_cores, 
                     root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
                     reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
                 )
@@ -481,7 +499,7 @@ async def route_post_status(
                     ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
                     ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
                     SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
-                    ROUND(AVG(cpu_num_cores), 2), ROUND(AVG(cpu_delay_us), 2), ROUND(AVG(disk_delay_us), 2),
+                    ROUND(AVG(cpu_num_cores), 2), 
                     ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
                     SUM(reads_completed), SUM(writes_completed),
                     SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
@@ -524,7 +542,7 @@ async def route_post_status(
                     cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
                     mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
                     default_interface_net_rx_bytes, default_interface_net_tx_bytes,
-                    cpu_num_cores, cpu_delay_us, disk_delay_us,
+                    cpu_num_cores, 
                     root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
                     reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
                 )
@@ -539,7 +557,7 @@ async def route_post_status(
                     ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
                     ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
                     SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
-                    ROUND(AVG(cpu_num_cores), 2), ROUND(AVG(cpu_delay_us), 2), ROUND(AVG(disk_delay_us), 2),
+                    ROUND(AVG(cpu_num_cores), 2), 
                     ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
                     SUM(reads_completed), SUM(writes_completed),
                     SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
@@ -649,6 +667,86 @@ async def get_status_hours(client_id: int, limit: int = 8760):
             (client_id, limit),
         )
         return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+
+
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "Admin123")
+
+def verify_admin_token(authorization: str = None) -> bool:
+    if not authorization:
+        return False
+    authorization = authorization.strip()
+    if authorization.startswith("Bearer "):
+        token = authorization[7:]
+    else:
+        token = authorization
+    return token == ADMIN_TOKEN
+
+
+class AdminClientUpdate(BaseModel):
+    machine_id: Optional[str] = None
+    hostname: Optional[str] = None
+    status: Optional[int] = None
+
+
+@app.get("/admin/client")
+async def admin_get_clients(authorization: str = Header(None)):
+    if not verify_admin_token(authorization):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute("SELECT * FROM client ORDER BY id")
+        results = cursor.fetchall()
+        return JSONResponse(content=[dict(row) for row in results])
+
+
+@app.put("/admin/client/{client_id}")
+async def admin_update_client(client_id: int, data: AdminClientUpdate, authorization: str = Header(None)):
+    if not verify_admin_token(authorization):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute("SELECT * FROM client WHERE id = ?", (client_id,))
+        client = cursor.fetchone()
+        if not client:
+            return JSONResponse(status_code=404, content={"error": "client not found"})
+        updates = {}
+        if data.machine_id is not None:
+            updates["machine_id"] = data.machine_id
+        if data.hostname is not None:
+            updates["hostname"] = data.hostname
+        if data.status is not None:
+            updates["status"] = data.status
+        if not updates:
+            return JSONResponse(content={"ok": True, "message": "no fields to update"})
+        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+        values = list(updates.values()) + [client_id]
+        cursor.execute(f"UPDATE client SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        cursor.execute("SELECT * FROM client WHERE id = ?", (client_id,))
+        updated_client = cursor.fetchone()
+        return JSONResponse(content={"ok": True, "client": dict(updated_client)})
+
+
+@app.delete("/admin/client/{client_id}")
+async def admin_delete_client(client_id: int, authorization: str = Header(None)):
+    if not verify_admin_token(authorization):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    with sqlite3.connect(DATABASE) as conn:
+        cursor = conn.cursor()
+        cursor.row_factory = sqlite3.Row
+        cursor.execute("SELECT * FROM client WHERE id = ?", (client_id,))
+        client = cursor.fetchone()
+        if not client:
+            return JSONResponse(status_code=404, content={"error": "client not found"})
+        cursor.execute("DELETE FROM status_latest WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM status_seconds WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM status_minutes WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM status_hours WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM client WHERE id = ?", (client_id,))
+        conn.commit()
+        return JSONResponse(content={"ok": True, "message": f"client {client_id} and all related data deleted"})
 
 
 KV = {}
