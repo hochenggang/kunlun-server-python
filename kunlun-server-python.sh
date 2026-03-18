@@ -412,7 +412,7 @@ do_client_list() {
         echo "$response" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-print(f'{'ID':<5} {'MACHINE_ID':<16} {'HOSTNAME':<20} {'STATUS':<8} {'IP':<16} {'LAST_UPDATE'}')
+print(f'ID    MACHINE_ID        HOSTNAME            STATUS    IP              LAST_UPDATE')
 print('-' * 80)
 for c in data:
     mid = c.get('machine_id', '')[:12] + '...'
@@ -468,7 +468,7 @@ do_client_approve() {
     
     local response=$(api_request "PUT" "/admin/client/$client_id" '{"status": 1}')
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已审核通过"
     else
         print_error "操作失败: $response"
@@ -489,7 +489,7 @@ do_client_reject() {
     
     local response=$(api_request "PUT" "/admin/client/$client_id" '{"status": 0}')
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已设置为待审核状态"
     else
         print_error "操作失败: $response"
@@ -517,7 +517,7 @@ do_client_delete() {
     
     local response=$(api_request "DELETE" "/admin/client/$client_id")
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已删除"
     else
         print_error "操作失败: $response"

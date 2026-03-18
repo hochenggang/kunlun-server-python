@@ -49,13 +49,16 @@ Kunlun Server Monitoring 由以下组件组成：
 
 #### 本地部署
 [部署文档](deploy.md)
-或通过一键部署脚本
+或通过此命令行一键安装
 ```bash
 bash <(curl -sL https://github.com/hochenggang/kunlun-server-python/raw/refs/heads/main/kunlun-server-python.sh) install
 ```
 
-
-
+单独运行此命令行可以管理程序的启动、停止、重启等操作
+可以批准或拒绝客户端的上报请求
+```bash
+bash <(curl -sL https://github.com/hochenggang/kunlun-server-python/raw/refs/heads/main/kunlun-server-python.sh)
+```
 ---
 
 ### 部署 [Kunlun Client](https://github.com/hochenggang/kunlun)
