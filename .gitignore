@@ -27,6 +27,6 @@ dist
 __pycache__
 venv
 
+.trae
 # Kunlun Server
 db/
-.env

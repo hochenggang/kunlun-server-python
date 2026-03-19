@@ -5,7 +5,8 @@ set -e
 APP_NAME="kunlun-server-python"
 APP_DIR="/opt/apps/$APP_NAME"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
-REPO_URL="https://github.com/hochenggang/kunlun-server-python.git"
+REPO_URL="https://github.com/hochenggang/kunlun-server-python"
+RELEASE_API="https://api.github.com/repos/hochenggang/kunlun-server-python/releases/latest"
 ENV_FILE="$APP_DIR/.env"
 
 RED='\033[0;31m'
@@ -62,7 +63,7 @@ check_dependencies() {
     print_info "检查依赖..."
     local missing=()
     
-    for cmd in python3 git curl; do
+    for cmd in python3 curl tar; do
         if ! command -v $cmd &> /dev/null; then
             missing+=($cmd)
         fi
@@ -85,6 +86,15 @@ check_service_running() {
     fi
 }
 
+get_latest_version() {
+    local version
+    version=$(curl -sI "$REPO_URL/releases/latest" | grep -i "location:" | sed 's/.*tag\///' | tr -d '\r\n')
+    if [[ -z "$version" ]]; then
+        version="v0.3.5"
+    fi
+    echo "$version"
+}
+
 show_help() {
     print_banner
     echo "用法: $0 <命令> [参数]"
@@ -97,6 +107,7 @@ show_help() {
     echo "  stop                 停止服务"
     echo "  restart              重启服务"
     echo "  logs                 查看服务日志"
+    echo "  upgrade              升级到最新版本"
     echo ""
     echo -e "${CYAN}客户端管理:${NC}"
     echo "  client list          查看所有客户端"
@@ -108,12 +119,14 @@ show_help() {
     echo ""
     echo -e "${CYAN}其他:${NC}"
     echo "  help                 显示此帮助信息"
+    echo "  version              显示当前版本"
     echo ""
     echo "示例:"
     echo "  $0 install"
     echo "  $0 client list"
     echo "  $0 client approve 1"
     echo "  $0 client delete 2"
+    echo "  $0 upgrade"
 }
 
 get_user_input() {
@@ -136,11 +149,16 @@ get_user_input() {
     read -p "服务端口 [默认: 8008]: " service_port
     SERVICE_PORT=${service_port:-8008}
     
+    local latest_version=$(get_latest_version)
+    read -p "安装版本 [默认: $latest_version]: " install_version
+    INSTALL_VERSION=${install_version:-$latest_version}
+    
     echo ""
     echo -e "${YELLOW}配置确认:${NC}"
     echo "  安装目录: $APP_DIR"
     echo "  管理员 Token: $admin_token"
     echo "  服务端口: $SERVICE_PORT"
+    echo "  安装版本: $INSTALL_VERSION"
     echo ""
     
     read -p "确认安装? [Y/n]: " confirm
@@ -175,10 +193,27 @@ deploy_code() {
     fi
     
     mkdir -p "$APP_DIR"
-    cd "$APP_DIR"
     
-    print_info "克隆代码仓库..."
-    git clone "$REPO_URL" .
+    print_info "下载版本 $INSTALL_VERSION..."
+    local download_url="$REPO_URL/archive/refs/tags/$INSTALL_VERSION.tar.gz"
+    
+    print_info "下载地址: $download_url"
+    
+    local tmp_dir=$(mktemp -d)
+    curl -sL "$download_url" -o "$tmp_dir/release.tar.gz"
+    
+    print_info "解压代码..."
+    tar -xzf "$tmp_dir/release.tar.gz" -C "$tmp_dir"
+    
+    local extracted_dir=$(find "$tmp_dir" -maxdepth 1 -type d -name "kunlun-server-python-*" | head -1)
+    if [[ -z "$extracted_dir" ]]; then
+        print_error "解压失败，未找到代码目录"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+    
+    cp -r "$extracted_dir"/* "$APP_DIR/"
+    rm -rf "$tmp_dir"
     
     print_info "代码部署完成"
 }
@@ -284,6 +319,7 @@ print_summary() {
     echo "  查看日志: $0 logs"
     echo "  查看客户端: $0 client list"
     echo "  审核客户端: $0 client approve <id>"
+    echo "  升级版本: $0 upgrade"
     echo ""
 }
 
@@ -374,6 +410,84 @@ do_logs() {
     journalctl -u "$APP_NAME" -f
 }
 
+do_version() {
+    print_banner
+    if [[ -f "$APP_DIR/.version" ]]; then
+        echo "当前版本: $(cat $APP_DIR/.version)"
+    else
+        echo "当前版本: 未知 (可能是旧版本安装)"
+    fi
+    echo "最新版本: $(get_latest_version)"
+}
+
+do_upgrade() {
+    check_root "upgrade"
+    check_service_running
+    
+    local current_version
+    if [[ -f "$APP_DIR/.version" ]]; then
+        current_version=$(cat "$APP_DIR/.version")
+    else
+        current_version="未知"
+    fi
+    
+    local latest_version=$(get_latest_version)
+    
+    print_banner
+    echo "当前版本: $current_version"
+    echo "最新版本: $latest_version"
+    echo ""
+    
+    if [[ "$current_version" == "$latest_version" ]]; then
+        print_info "已是最新版本"
+        exit 0
+    fi
+    
+    read -p "确认升级到 $latest_version? [Y/n]: " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        print_info "升级已取消"
+        exit 0
+    fi
+    
+    print_info "备份配置..."
+    local backup_env="$APP_DIR/.env"
+    local backup_db="$APP_DIR/db"
+    
+    print_info "下载新版本..."
+    local tmp_dir=$(mktemp -d)
+    local download_url="$REPO_URL/archive/refs/tags/$latest_version.tar.gz"
+    
+    curl -sL "$download_url" -o "$tmp_dir/release.tar.gz"
+    tar -xzf "$tmp_dir/release.tar.gz" -C "$tmp_dir"
+    
+    local extracted_dir=$(find "$tmp_dir" -maxdepth 1 -type d -name "kunlun-server-python-*" | head -1)
+    
+    print_info "更新代码..."
+    cp "$extracted_dir"/app.py "$APP_DIR/"
+    cp "$extracted_dir"/requirements.txt "$APP_DIR/"
+    cp "$extracted_dir"/Dockerfile "$APP_DIR/"
+    cp "$extracted_dir"/kunlun-server-python.sh "$APP_DIR/"
+    
+    echo "$latest_version" > "$APP_DIR/.version"
+    
+    rm -rf "$tmp_dir"
+    
+    print_info "更新依赖..."
+    cd "$APP_DIR"
+    source venv/bin/activate
+    pip install -r requirements.txt
+    
+    print_info "设置权限..."
+    chown -R "$APP_NAME:$APP_NAME" "$APP_DIR"
+    chmod 600 "$APP_DIR/.env"
+    
+    print_info "重启服务..."
+    systemctl restart "$APP_NAME"
+    
+    echo ""
+    print_info "升级完成! 当前版本: $latest_version"
+}
+
 api_request() {
     local method=$1
     local endpoint=$2
@@ -405,18 +519,18 @@ do_client_list() {
     local response=$(api_request "GET" "/admin/client")
     
     if command -v jq &> /dev/null; then
-        echo "$response" | jq -r '.[] | "\(.id)\t\(.machine_id[0:12])...\t\(.hostname)\t\(.status)\t\(.ip // "N/A")\t\(.last_update)"' | column -t -s $'\t'
-        echo ""
-        echo -e "${CYAN}ID\tMACHINE_ID\t\tHOSTNAME\t\tSTATUS\tIP\t\tLAST_UPDATE${NC}"
+        echo "$response" | jq -r '(.[0] | keys_unsorted | @tsv), (.[] | [.id, .machine_id[0:12], .hostname, .status, .ip // "N/A", .last_update] | @tsv)' | column -t -s $'\t'
     else
         echo "$response" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-print(f'{'ID':<5} {'MACHINE_ID':<16} {'HOSTNAME':<20} {'STATUS':<8} {'IP':<16} {'LAST_UPDATE'}')
-print('-' * 80)
-for c in data:
-    mid = c.get('machine_id', '')[:12] + '...'
-    print(f\"{c['id']:<5} {mid:<16} {c.get('hostname', 'N/A'):<20} {c.get('status', 'N/A'):<8} {c.get('ip', 'N/A'):<16} {c.get('last_update', 'N/A')}\")
+if data:
+    headers = ['ID', 'MACHINE_ID', 'HOSTNAME', 'STATUS', 'IP', 'LAST_UPDATE']
+    print('\t'.join(headers))
+    print('-' * 80)
+    for c in data:
+        mid = c.get('machine_id', '')[:12]
+        print(f\"{c['id']}\t{mid}\t{c.get('hostname', 'N/A')}\t{c.get('status', 'N/A')}\t{c.get('ip', 'N/A')}\t{c.get('last_update', 'N/A')}\")
 "
     fi
 }
@@ -448,7 +562,7 @@ if not pending:
 else:
     print(f'待审核客户端 ({len(pending)}):')
     for c in pending:
-        mid = c.get('machine_id', '')[:12] + '...'
+        mid = c.get('machine_id', '')[:12]
         print(f\"  ID: {c['id']}, MachineID: {mid}, Hostname: {c.get('hostname', 'N/A')}, IP: {c.get('ip', 'N/A')}\")
 "
     fi
@@ -619,6 +733,12 @@ main() {
             ;;
         logs)
             do_logs
+            ;;
+        upgrade)
+            do_upgrade
+            ;;
+        version)
+            do_version
             ;;
         client)
             handle_client "$@"

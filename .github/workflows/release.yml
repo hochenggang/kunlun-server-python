@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create release archive
+        run: |
+          mkdir -p release_package
+          cp app.py requirements.txt Dockerfile kunlun-server-python.sh deploy.md README.md release_package/
+          tar -czvf kunlun-server-python-${{ steps.get_version.outputs.VERSION }}.tar.gz -C release_package .
+          zip -r kunlun-server-python-${{ steps.get_version.outputs.VERSION }}.zip release_package/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Kunlun Server Python ${{ steps.get_version.outputs.VERSION }}
+            
+            ### 安装方式
+            
+            **一键安装脚本:**
+            ```bash
+            bash <(curl -sL https://github.com/hochenggang/kunlun-server-python/raw/main/kunlun-server-python.sh) install
+            ```
+            
+            **手动下载:**
+            - 下载下方附件解压后部署
+          files: |
+            kunlun-server-python-${{ steps.get_version.outputs.VERSION }}.tar.gz
+            kunlun-server-python-${{ steps.get_version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: false

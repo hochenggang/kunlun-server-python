@@ -4,7 +4,26 @@
 
 ---
 
-## 1. 创建专用用户
+## 快速安装（推荐）
+
+使用一键安装脚本：
+
+```bash
+bash <(curl -sL https://github.com/hochenggang/kunlun-server-python/raw/main/kunlun-server-python.sh) install
+```
+
+脚本会自动：
+- 检测最新版本
+- 下载并解压代码
+- 创建专用用户和 systemd 服务
+- 配置环境变量
+- 启动服务
+
+---
+
+## 手动部署
+
+### 1. 创建专用用户
 
 ```bash
 useradd -r -s /usr/sbin/nologin -M kunlun-server-python
@@ -16,17 +35,31 @@ useradd -r -s /usr/sbin/nologin -M kunlun-server-python
 
 ---
 
-## 2. 部署代码
+### 2. 下载代码
+
+从 GitHub Releases 下载最新版本：
 
 ```bash
+# 获取最新版本号
+LATEST_VERSION=$(curl -sI https://github.com/hochenggang/kunlun-server-python/releases/latest | grep -i "location:" | sed 's/.*tag\///' | tr -d '\r\n')
+
+# 创建目录
 mkdir -p /opt/apps/kunlun-server-python
 cd /opt/apps/kunlun-server-python
-git clone https://github.com/hochenggang/kunlun-server-python.git .
+
+# 下载并解压
+curl -sL https://github.com/hochenggang/kunlun-server-python/archive/refs/tags/${LATEST_VERSION}.tar.gz -o release.tar.gz
+tar -xzf release.tar.gz
+mv kunlun-server-python-*/* .
+rm -rf kunlun-server-python-* release.tar.gz
+
+# 记录版本号
+echo $LATEST_VERSION > .version
 ```
 
 ---
 
-## 3. 创建虚拟环境并安装依赖
+### 3. 创建虚拟环境并安装依赖
 
 ```bash
 python3 -m venv venv
@@ -36,7 +69,7 @@ pip install -r requirements.txt
 
 ---
 
-## 4. 创建数据库目录
+### 4. 创建数据库目录
 
 应用运行时会在 `db/` 目录下创建 SQLite 数据库文件：
 
@@ -46,7 +79,7 @@ mkdir -p db
 
 ---
 
-## 5. 创建环境变量文件
+### 5. 创建环境变量文件
 
 创建 `.env` 文件配置管理员 Token：
 
@@ -60,17 +93,18 @@ EOF
 
 ---
 
-## 6. 设置目录权限
+### 6. 设置目录权限
 
 将应用目录所有者改为专用用户：
 
 ```bash
 chown -R kunlun-server-python:kunlun-server-python /opt/apps/kunlun-server-python
+chmod 600 /opt/apps/kunlun-server-python/.env
 ```
 
 ---
 
-## 7. 创建 systemd 服务文件
+### 7. 创建 systemd 服务文件
 
 ```bash
 nano /etc/systemd/system/kunlun-server-python.service
@@ -107,7 +141,7 @@ WantedBy=multi-user.target
 
 ---
 
-## 8. 启动服务
+### 8. 启动服务
 
 ```bash
 # 重新加载 systemd 配置
@@ -122,7 +156,7 @@ systemctl enable kunlun-server-python
 
 ---
 
-## 9. 验证服务
+### 9. 验证服务
 
 ```bash
 # 查看服务状态
@@ -155,13 +189,46 @@ journalctl -u kunlun-server-python --since today
 
 ---
 
-## 更新部署
+## 版本升级
+
+使用管理脚本升级：
+
+```bash
+# 升级到最新版本
+kunlun-server-python.sh upgrade
+```
+
+或手动升级：
 
 ```bash
 cd /opt/apps/kunlun-server-python
+
+# 获取最新版本
+LATEST_VERSION=$(curl -sI https://github.com/hochenggang/kunlun-server-python/releases/latest | grep -i "location:" | sed 's/.*tag\///' | tr -d '\r\n')
+
+# 备份配置
+cp .env .env.bak
+
+# 下载新版本
+curl -sL https://github.com/hochenggang/kunlun-server-python/archive/refs/tags/${LATEST_VERSION}.tar.gz -o release.tar.gz
+tar -xzf release.tar.gz
+
+# 更新文件
+cp kunlun-server-python-*/app.py .
+cp kunlun-server-python-*/requirements.txt .
+rm -rf kunlun-server-python-* release.tar.gz
+
+# 更新版本号
+echo $LATEST_VERSION > .version
+
+# 更新依赖
 source venv/bin/activate
-git pull
 pip install -r requirements.txt
+
+# 恢复配置
+mv .env.bak .env
+
+# 重启服务
 systemctl restart kunlun-server-python
 ```
 
@@ -231,38 +298,38 @@ chown -R kunlun-server-python:kunlun-server-python /opt/apps/kunlun-server-pytho
 curl -H "Authorization: your_token" http://localhost:8008/admin/client
 ```
 
+---
 
+## Docker 部署
 
-#### 使用 Docker 自行构建镜像部署
-
-##### 克隆项目
+### 使用 Docker 自行构建镜像部署
 
 ```bash
 git clone https://github.com/hochenggang/kunlun-server-python.git
 cd kunlun-server-python
 ```
 
----
-
-# 使用 Docker 运行
+### 使用 Docker 运行
 
 确保已安装 Docker，然后运行以下命令：
 
 ```bash
 mkdir -p /opt/kunlun-server/db
-docker build -t kunlun-server:0.1.1 .
-docker run -d --network host -e ADMIN_TOKEN=your_secure_token -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server:0.1.1
+docker build -t kunlun-server:latest .
+docker run -d --network host -e ADMIN_TOKEN=your_secure_token -v /opt/kunlun-server/db:/app/db -p 8008:8008 kunlun-server:latest
 ```
 
 - `-e ADMIN_TOKEN=your_secure_token`：设置管理员鉴权 Token，用于访问 `/admin/*` API。**强烈建议设置一个强密码**，若不设置则默认为 `Admin123`。
 - `-v /opt/kunlun-server/db:/app/db`：将主机的 `/opt/kunlun-server/db` 目录挂载到容器内的 `/app/db` 目录，用于持久化 SQLite 数据库文件。
 - `-p 8008:8008`：访问主机的 8008 端口时，转发到容器的 8008 端口。若8008端口已经被使用，你可以修改`-p 宿主机端口:8008` 
 
+---
 
 ### 访问 Web 界面
 
 在浏览器中访问 `http://<server-ip>:8008`，即可查看服务器监控仪表盘。
 
+---
 
 ### 删除节点
 
@@ -301,4 +368,32 @@ curl -X PUT -H "Authorization: $ADMIN_TOKEN" \
   -d '{"status": 1}' \
   http://localhost:8008/admin/client/1
 ```
+
 ---
+
+## 管理脚本命令
+
+安装后可使用管理脚本：
+
+```bash
+# 查看帮助
+kunlun-server-python.sh help
+
+# 服务管理
+kunlun-server-python.sh status
+kunlun-server-python.sh start
+kunlun-server-python.sh stop
+kunlun-server-python.sh restart
+kunlun-server-python.sh logs
+
+# 版本管理
+kunlun-server-python.sh version
+kunlun-server-python.sh upgrade
+
+# 客户端管理
+kunlun-server-python.sh client list
+kunlun-server-python.sh client pending
+kunlun-server-python.sh client approve <id>
+kunlun-server-python.sh client reject <id>
+kunlun-server-python.sh client delete <id>
+```

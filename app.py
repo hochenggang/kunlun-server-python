@@ -1,15 +1,14 @@
 import os
 import logging
 import sqlite3
+from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import FastAPI, Form, Response, Request, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-
-# 初始化日志
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,20 +17,136 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
-# 初始化数据库
 os.makedirs("db", exist_ok=True)
 DATABASE = "db/kunlun_status.db"
+
+
+class FieldType(str, Enum):
+    COUNTER = "counter"
+    GAUGE = "gauge"
+
+
+class KunlunReportLine(BaseModel):
+    client_id: Optional[int] = Field(default=None, json_schema_extra={"field_type": FieldType.GAUGE})
+    timestamp: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    uptime_s: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    load_1min: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    load_5min: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    load_15min: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    running_tasks: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    total_tasks: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    cpu_user: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_system: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_nice: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_idle: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_iowait: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_irq: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_softirq: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_steal: float = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    mem_total_mib: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    mem_free_mib: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    mem_used_mib: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    mem_buff_cache_mib: float = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    tcp_connections: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    udp_connections: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    default_interface_net_rx_bytes: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    default_interface_net_tx_bytes: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    cpu_num_cores: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    root_disk_total_kb: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    root_disk_avail_kb: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    reads_completed: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    writes_completed: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    reading_ms: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    writing_ms: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    iotime_ms: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    ios_in_progress: int = Field(json_schema_extra={"field_type": FieldType.GAUGE})
+    weighted_io_time: int = Field(json_schema_extra={"field_type": FieldType.COUNTER})
+    machine_id: Optional[str] = Field(default=None, json_schema_extra={"field_type": FieldType.GAUGE})
+    hostname: Optional[str] = Field(default="unknown", json_schema_extra={"field_type": FieldType.GAUGE})
+
+
+EXCLUDED_FIELDS = {"client_id", "machine_id", "hostname"}
+
+
+def get_status_fields() -> list[str]:
+    return [f for f in KunlunReportLine.model_fields.keys() if f not in EXCLUDED_FIELDS]
+
+
+def get_counter_fields() -> list[str]:
+    return [
+        f for f, field in KunlunReportLine.model_fields.items()
+        if field.json_schema_extra.get("field_type") == FieldType.COUNTER
+    ]
+
+
+def get_gauge_fields() -> list[str]:
+    return [
+        f for f, field in KunlunReportLine.model_fields.items()
+        if field.json_schema_extra.get("field_type") == FieldType.GAUGE and f not in EXCLUDED_FIELDS
+    ]
+
+
+def get_db_column_def() -> str:
+    type_map = {
+        int: "INTEGER NOT NULL",
+        float: "REAL NOT NULL",
+    }
+    columns = []
+    for name in get_status_fields():
+        field = KunlunReportLine.model_fields[name]
+        db_type = type_map.get(field.annotation, "TEXT")
+        columns.append(f"{name} {db_type}")
+    return ",\n            ".join(columns)
+
+
+def rows_to_table(rows: list[dict]) -> list[list]:
+    if not rows:
+        return []
+    headers = list(rows[0].keys())
+    return [headers] + [list(row.values()) for row in rows]
+
+
+def generate_insert_query(table_name: str, fields: list) -> str:
+    fields_str = ", ".join(fields)
+    placeholders = ", ".join(["?"] * len(fields))
+    return f"INSERT OR REPLACE INTO {table_name} ({fields_str}) VALUES ({placeholders})"
+
+
+def generate_aggregate_sql(source_table: str, target_table: str, interval_seconds: int) -> str:
+    status_fields = get_status_fields()
+    counter_fields = get_counter_fields()
+    
+    select_parts = ["client_id", "MAX(timestamp) AS timestamp"]
+    for f in status_fields:
+        if f in ("client_id", "timestamp"):
+            continue
+        if f in counter_fields:
+            select_parts.append(f"SUM({f}) AS {f}")
+        else:
+            select_parts.append(f"ROUND(AVG({f}), 2) AS {f}")
+    
+    insert_fields = ["client_id", "timestamp"] + [f for f in status_fields if f not in ("client_id", "timestamp")]
+    
+    return f"""
+        INSERT INTO {target_table} ({', '.join(insert_fields)})
+        SELECT {', '.join(select_parts)}
+        FROM {source_table}
+        WHERE client_id = ? AND timestamp >= ? - {interval_seconds}
+        GROUP BY client_id
+    """
+
+
+STATUS_FIELDS = get_status_fields()
+COUNTER_FIELDS = get_counter_fields()
+GAUGE_FIELDS = get_gauge_fields()
+FIELDS_LIST = STATUS_FIELDS + ["machine_id", "hostname"]
 
 
 def init_db():
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
-        # 启用 WAL 模式
         cursor.execute("PRAGMA journal_mode=WAL;")
-        # 设置 busy_timeout 为 10 秒
         cursor.execute("PRAGMA busy_timeout=10000;")
-        # 创建 client 表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS client (
                 id INTEGER PRIMARY KEY NOT NULL,
@@ -44,42 +159,7 @@ def init_db():
             )
         """)
 
-        columns = """
-            timestamp INTEGER NOT NULL,
-            uptime_s INTEGER NOT NULL,
-            load_1min REAL NOT NULL,
-            load_5min REAL NOT NULL,
-            load_15min REAL NOT NULL,
-            running_tasks INTEGER NOT NULL,
-            total_tasks INTEGER NOT NULL,
-            cpu_user REAL NOT NULL,
-            cpu_system REAL NOT NULL,
-            cpu_nice REAL NOT NULL,
-            cpu_idle REAL NOT NULL,
-            cpu_iowait REAL NOT NULL,
-            cpu_irq REAL NOT NULL,
-            cpu_softirq REAL NOT NULL,
-            cpu_steal REAL NOT NULL,
-            mem_total_mib REAL NOT NULL,
-            mem_free_mib REAL NOT NULL,
-            mem_used_mib REAL NOT NULL,
-            mem_buff_cache_mib REAL NOT NULL,
-            tcp_connections INTEGER NOT NULL,
-            udp_connections INTEGER NOT NULL,
-            default_interface_net_rx_bytes INTEGER NOT NULL,
-            default_interface_net_tx_bytes INTEGER NOT NULL,
-            cpu_num_cores INTEGER NOT NULL,
-            root_disk_total_kb INTEGER NOT NULL,
-            root_disk_avail_kb INTEGER NOT NULL,
-            reads_completed INTEGER NOT NULL,
-            writes_completed INTEGER NOT NULL,
-            reading_ms INTEGER NOT NULL,
-            writing_ms INTEGER NOT NULL,
-            iotime_ms INTEGER NOT NULL,
-            ios_in_progress INTEGER NOT NULL,
-            weighted_io_time INTEGER NOT NULL
-        """
-        # 创建 status_latest 表
+        columns = get_db_column_def()
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS status_latest (
                 client_id INTEGER PRIMARY KEY,
@@ -87,7 +167,6 @@ def init_db():
                 FOREIGN KEY (client_id) REFERENCES client(id)
             )
         """)
-        # 创建 status_seconds 表
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS status_seconds (
                 client_id INTEGER NOT NULL,
@@ -96,7 +175,6 @@ def init_db():
                 FOREIGN KEY (client_id) REFERENCES client(id)
             )
         """)
-        # 创建 status_minutes 表
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS status_minutes (
                 client_id INTEGER NOT NULL,
@@ -105,7 +183,6 @@ def init_db():
                 FOREIGN KEY (client_id) REFERENCES client(id)
             )
         """)
-        # 创建 status_hours 表
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS status_hours (
                 client_id INTEGER NOT NULL,
@@ -117,24 +194,20 @@ def init_db():
         conn.commit()
 
         cursor.execute("PRAGMA table_info(client)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'status' not in columns:
+        cols = [col[1] for col in cursor.fetchall()]
+        if 'status' not in cols:
             cursor.execute("ALTER TABLE client ADD COLUMN status INTEGER NOT NULL DEFAULT 0")
-        if 'last_update' not in columns:
+        if 'last_update' not in cols:
             cursor.execute("ALTER TABLE client ADD COLUMN last_update INTEGER NOT NULL DEFAULT 0")
-        if 'ip' not in columns:
+        if 'ip' not in cols:
             cursor.execute("ALTER TABLE client ADD COLUMN ip TEXT")
         conn.commit()
 
 
 init_db()
 
-
-# 初始化 FastAPI 应用
 app = FastAPI()
 
-
-# 添加 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -143,120 +216,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# 定义数据类型
-class KunlunReportLine(BaseModel):
-    client_id: Optional[int] = None
-    timestamp: int
-    uptime_s: int
-    load_1min: float
-    load_5min: float
-    load_15min: float
-    running_tasks: int
-    total_tasks: int
-    cpu_user: float
-    cpu_system: float
-    cpu_nice: float
-    cpu_idle: float
-    cpu_iowait: float
-    cpu_irq: float
-    cpu_softirq: float
-    cpu_steal: float
-    mem_total_mib: float
-    mem_free_mib: float
-    mem_used_mib: float
-    mem_buff_cache_mib: float
-    tcp_connections: int
-    udp_connections: int
-    default_interface_net_rx_bytes: int
-    default_interface_net_tx_bytes: int
-    cpu_num_cores: int
-    root_disk_total_kb: int
-    root_disk_avail_kb: int
-    reads_completed: int
-    writes_completed: int
-    reading_ms: int
-    writing_ms: int
-    iotime_ms: int
-    ios_in_progress: int
-    weighted_io_time: int
-    machine_id: Optional[str] = None
-    hostname: Optional[str] = "unknown"
-
-
-# 这是需要的字段名称列表
-FIELDS_LIST = [
-    "timestamp",
-    "uptime_s",
-    "load_1min",
-    "load_5min",
-    "load_15min",
-    "running_tasks",
-    "total_tasks",
-    "cpu_user",
-    "cpu_system",
-    "cpu_nice",
-    "cpu_idle",
-    "cpu_iowait",
-    "cpu_irq",
-    "cpu_softirq",
-    "cpu_steal",
-    "mem_total_mib",
-    "mem_free_mib",
-    "mem_used_mib",
-    "mem_buff_cache_mib",
-    "tcp_connections",
-    "udp_connections",
-    "default_interface_net_rx_bytes",
-    "default_interface_net_tx_bytes",
-    "cpu_num_cores",
-    "root_disk_total_kb",
-    "root_disk_avail_kb",
-    "reads_completed",
-    "writes_completed",
-    "reading_ms",
-    "writing_ms",
-    "iotime_ms",
-    "ios_in_progress",
-    "weighted_io_time",
-    "machine_id",
-    "hostname",
-]
-
-
-# 动态生成 SQL 查询
-def generate_insert_query(table_name: str, fields: list) -> str:
-    """
-    生成 INSERT OR REPLACE 查询语句。
-
-    :param table_name: 表名
-    :param fields: 字段列表
-    :return: 生成的 SQL 查询语句
-    """
-    # 生成字段部分
-    fields_str = ", ".join(fields)
-    # 生成占位符部分
-    placeholders = ", ".join(["?"] * len(fields))
-    # 返回完整的 SQL 查询
-    return f"INSERT OR REPLACE INTO {table_name} ({fields_str}) VALUES ({placeholders})"
-
-
-# 定义路由
-
 import time
 
-def db_get_client_id(machine_id: str, hostname: str, client_ip: str) -> tuple[int, int]:
-    """
-    使用 machine_id 和 hostname 获取 client_id 和 status。
-    如果 machine_id 不存在，则插入新记录（status=0）并返回 client_id 和 status。
-    如果 hostname 发生变化，则更新数据库中的 hostname。
-    每次请求更新 ip 和 last_update。
 
-    :param machine_id: 客户端的唯一标识
-    :param hostname: 客户端的主机名
-    :param client_ip: 客户端的 IP 地址
-    :return: (client_id, status)
-    """
+def db_get_client_id(machine_id: str, hostname: str, client_ip: str) -> tuple[int, int]:
     current_ts = int(time.time())
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
@@ -304,62 +267,21 @@ def db_get_client_id(machine_id: str, hostname: str, client_ip: str) -> tuple[in
         return client_id, status
 
 
-# 辅助函数
-
-def hleper_calculate_delta(
-    new_data: KunlunReportLine, last_data: KunlunReportLine
-) -> KunlunReportLine:
-    """
-    计算两个 KunlunReportLine 对象之间的差值。
-
-    :param new_data: 新的数据点
-    :param last_data: 上一个数据点
-    :return: 差值计算结果
-    """
-    delta_data = KunlunReportLine(
-        client_id=new_data.client_id,
-        timestamp=new_data.timestamp,
-        uptime_s=new_data.uptime_s,
-        load_1min=new_data.load_1min,
-        load_5min=new_data.load_5min,
-        load_15min=new_data.load_15min,
-        running_tasks=new_data.running_tasks,
-        total_tasks=new_data.total_tasks,
-        cpu_user=new_data.cpu_user - last_data.cpu_user,
-        cpu_system=new_data.cpu_system - last_data.cpu_system,
-        cpu_nice=new_data.cpu_nice - last_data.cpu_nice,
-        cpu_idle=new_data.cpu_idle - last_data.cpu_idle,
-        cpu_iowait=new_data.cpu_iowait - last_data.cpu_iowait,
-        cpu_irq=new_data.cpu_irq - last_data.cpu_irq,
-        cpu_softirq=new_data.cpu_softirq - last_data.cpu_softirq,
-        cpu_steal=new_data.cpu_steal - last_data.cpu_steal,
-        mem_total_mib=new_data.mem_total_mib,
-        mem_free_mib=new_data.mem_free_mib,
-        mem_used_mib=new_data.mem_used_mib,
-        mem_buff_cache_mib=new_data.mem_buff_cache_mib,
-        tcp_connections=new_data.tcp_connections,
-        udp_connections=new_data.udp_connections,
-        default_interface_net_rx_bytes=new_data.default_interface_net_rx_bytes
-        - last_data.default_interface_net_rx_bytes,
-        default_interface_net_tx_bytes=new_data.default_interface_net_tx_bytes
-        - last_data.default_interface_net_tx_bytes,
-        cpu_num_cores=new_data.cpu_num_cores,
-        root_disk_total_kb=new_data.root_disk_total_kb,
-        root_disk_avail_kb=new_data.root_disk_avail_kb,
-        reads_completed=new_data.reads_completed - last_data.reads_completed,
-        writes_completed=new_data.writes_completed - last_data.writes_completed,
-        reading_ms=new_data.reading_ms - last_data.reading_ms,
-        writing_ms=new_data.writing_ms - last_data.writing_ms,
-        iotime_ms=new_data.iotime_ms - last_data.iotime_ms,
-        ios_in_progress=new_data.ios_in_progress,
-        weighted_io_time=new_data.weighted_io_time - last_data.weighted_io_time,
-        machine_id=new_data.machine_id,
-        hostname=new_data.hostname,
-    )
-    return delta_data
+def calculate_delta(new_data: KunlunReportLine, last_data: KunlunReportLine) -> KunlunReportLine:
+    delta_data = {}
+    for name, field in KunlunReportLine.model_fields.items():
+        field_type = field.json_schema_extra.get("field_type", FieldType.GAUGE)
+        new_val = getattr(new_data, name)
+        old_val = getattr(last_data, name)
+        
+        if field_type == FieldType.COUNTER and old_val is not None and new_val is not None:
+            delta_data[name] = new_val - old_val
+        else:
+            delta_data[name] = new_val
+    
+    return KunlunReportLine(**delta_data)
 
 
-# 自定义中间件
 @app.middleware("http")
 async def global_error_handler(request: Request, call_next):
     try:
@@ -378,10 +300,6 @@ async def route_post_status(
     request: Request,
     values: str = Form(...),
 ):
-    """
-    接收监控数据并保存到数据库
-    """
-
     values_list = values.split(",")
 
     if len(values_list) != len(FIELDS_LIST):
@@ -415,7 +333,6 @@ async def route_post_status(
             content={"error": "client not approved, status=0, waiting for admin approval"},
         )
 
-    # 查询前一条最新数据, 为计算差值做准备
     kunlun_report_line_before = None
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
@@ -425,7 +342,6 @@ async def route_post_status(
         if last_data:
             kunlun_report_line_before = KunlunReportLine(**last_data)
 
-    # 写入最新状态
     kunlun_report_line_dict = kunlun_report_line.model_dump()
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
@@ -440,8 +356,7 @@ async def route_post_status(
     if not kunlun_report_line_before:
         return JSONResponse(status_code=200, content={"ok": 1})
 
-    # 如果前一条最新原始数据存在，求取差值并写入十秒级汇总数据
-    kunlun_report_line_delta_10s = hleper_calculate_delta(
+    kunlun_report_line_delta_10s = calculate_delta(
         kunlun_report_line, kunlun_report_line_before
     )
     kunlun_report_line_delta_10s_dict = kunlun_report_line_delta_10s.model_dump()
@@ -454,7 +369,6 @@ async def route_post_status(
             list(kunlun_report_line_delta_10s_dict.values())[:-2],
         )
 
-        # 秒级数据只保留 1小时的数据，合计360条，需要清理超出上限的秒级数据
         cursor.execute(
             """
             DELETE FROM status_seconds
@@ -462,124 +376,47 @@ async def route_post_status(
                 SELECT client_id, timestamp FROM status_seconds
                 WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 360
             );
-            """,  # 按时间戳降序，跳过最新360条，删除剩余旧数据
+            """,
             (client_id,),
         )
         conn.commit()
 
-    # 检查是否为每分钟的开始
     if kunlun_report_line.timestamp % 60 == 0:
-        # logger.info(
-        #     f"It's the start of a minute, calculating delta... {str(kunlun_report_line)}"
-        # )
-
-        # 汇总秒级数据，生成分钟级数据
         with sqlite3.connect(DATABASE) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
-                INSERT INTO status_minutes (
-                    client_id, timestamp, uptime_s, load_1min, load_5min, load_15min,
-                    running_tasks, total_tasks, cpu_user, cpu_system, cpu_nice, cpu_idle,
-                    cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
-                    mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
-                    default_interface_net_rx_bytes, default_interface_net_tx_bytes,
-                    cpu_num_cores, 
-                    root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
-                    reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
-                )
-                SELECT
-                    client_id,
-                    MAX(timestamp),
-                    ROUND(AVG(uptime_s), 2),
-                    ROUND(AVG(load_1min), 2), ROUND(AVG(load_5min), 2), ROUND(AVG(load_15min), 2),
-                    ROUND(AVG(running_tasks), 2), ROUND(AVG(total_tasks), 2),
-                    ROUND(SUM(cpu_user), 2), ROUND(SUM(cpu_system), 2), ROUND(SUM(cpu_nice), 2),
-                    ROUND(SUM(cpu_idle), 2), ROUND(SUM(cpu_iowait), 2), ROUND(SUM(cpu_irq), 2), ROUND(SUM(cpu_softirq), 2), ROUND(SUM(cpu_steal), 2),
-                    ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
-                    ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
-                    SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
-                    ROUND(AVG(cpu_num_cores), 2), 
-                    ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
-                    SUM(reads_completed), SUM(writes_completed),
-                    SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
-                    ROUND(AVG(ios_in_progress), 2), ROUND(SUM(weighted_io_time), 2)
-                FROM status_seconds
-                WHERE 
-                    client_id = ? 
-                    AND timestamp >= ? - 60
-                GROUP BY client_id;
-            """,
+                generate_aggregate_sql("status_seconds", "status_minutes", 60),
                 (client_id, kunlun_report_line.timestamp),
             )
 
-            # 清理超出上限的分钟级数据
             cursor.execute(
                 """
                 DELETE FROM status_minutes
                 WHERE (client_id, timestamp) IN (
                     SELECT client_id, timestamp FROM status_minutes
-                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1  OFFSET 1440
+                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 1440
                 );
-            """,  # 保留最新1440条（24小时）
+            """,
                 (client_id,),
             )
             conn.commit()
 
-    # 检查是否为每小时的开始
     if kunlun_report_line.timestamp % 3600 == 0:
-        # logger.info(
-        #     f"It's the start of a hour, calculating delta... {str(kunlun_report_line)}"
-        # )
-        # 汇总分钟级数据，生成小时级数据
         with sqlite3.connect(DATABASE) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
-                INSERT INTO status_hours (
-                    client_id, timestamp, uptime_s, load_1min, load_5min, load_15min,
-                    running_tasks, total_tasks, cpu_user, cpu_system, cpu_nice, cpu_idle,
-                    cpu_iowait, cpu_irq, cpu_softirq, cpu_steal, mem_total_mib, mem_free_mib,
-                    mem_used_mib, mem_buff_cache_mib, tcp_connections, udp_connections,
-                    default_interface_net_rx_bytes, default_interface_net_tx_bytes,
-                    cpu_num_cores, 
-                    root_disk_total_kb, root_disk_avail_kb, reads_completed, writes_completed,
-                    reading_ms, writing_ms, iotime_ms, ios_in_progress, weighted_io_time
-                )
-                SELECT
-                    client_id,
-                    MAX(timestamp),
-                    ROUND(AVG(uptime_s), 2),
-                    ROUND(AVG(load_1min), 2), ROUND(AVG(load_5min), 2), ROUND(AVG(load_15min), 2),
-                    ROUND(AVG(running_tasks), 2), ROUND(AVG(total_tasks), 2),
-                    ROUND(SUM(cpu_user), 2), ROUND(SUM(cpu_system), 2), ROUND(SUM(cpu_nice), 2),
-                    ROUND(SUM(cpu_idle), 2), ROUND(SUM(cpu_iowait), 2), ROUND(SUM(cpu_irq), 2), ROUND(SUM(cpu_softirq), 2), ROUND(SUM(cpu_steal), 2),
-                    ROUND(AVG(mem_total_mib), 2), ROUND(AVG(mem_free_mib), 2), ROUND(AVG(mem_used_mib), 2), ROUND(AVG(mem_buff_cache_mib), 2),
-                    ROUND(AVG(tcp_connections), 2), ROUND(AVG(udp_connections), 2),
-                    SUM(default_interface_net_rx_bytes), SUM(default_interface_net_tx_bytes),
-                    ROUND(AVG(cpu_num_cores), 2), 
-                    ROUND(AVG(root_disk_total_kb), 2), ROUND(AVG(root_disk_avail_kb), 2),
-                    SUM(reads_completed), SUM(writes_completed),
-                    SUM(reading_ms), SUM(writing_ms), SUM(iotime_ms),
-                    ROUND(AVG(ios_in_progress), 2), ROUND(SUM(weighted_io_time), 2)
-                FROM status_minutes
-                WHERE 
-                    client_id = ? 
-                    AND timestamp >= ? - 3600
-                GROUP BY client_id;
-                """,
+                generate_aggregate_sql("status_minutes", "status_hours", 3600),
                 (client_id, kunlun_report_line.timestamp),
             )
 
-            # 清理超出上限的小时级数据
             cursor.execute(
                 """
                 DELETE FROM status_hours
                 WHERE (client_id, timestamp) IN (
                     SELECT client_id, timestamp FROM status_hours
-                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1  OFFSET 8760
+                    WHERE client_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 8760
                 );
-            """,  # 保留最新 8760 条（365天）
+            """,
                 (client_id,),
             )
             conn.commit()
@@ -594,14 +431,9 @@ async def route_get_status():
 
 @app.get("/status/latest")
 async def get_status_latest():
-    """
-    获取所有客户端的最新状态数据，并包含 machine_id 和 hostname。
-    - 每个客户端只返回最新的一条记录。
-    """
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
         cursor.row_factory = sqlite3.Row
-        # 使用 JOIN 查询 status_latest 和 client 表，并只返回每个客户端的最新一条记录
         cursor.execute(
             """
             SELECT sl.*, c.machine_id, c.hostname
@@ -615,16 +447,11 @@ async def get_status_latest():
             """
         )
         results = cursor.fetchall()
-        return JSONResponse(content=[dict(row) for row in results])
+        return JSONResponse(content=rows_to_table([dict(row) for row in results]))
 
 
 @app.get("/status/seconds")
 async def get_status_seconds(client_id: int, limit: int = 360):
-    """
-    获取整理计算后的 10 秒级数据。
-    - client_id: 客户端 ID
-    - limit: 返回的记录数，默认为 360（1 小时数据）
-    """
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
         cursor.row_factory = sqlite3.Row
@@ -632,16 +459,11 @@ async def get_status_seconds(client_id: int, limit: int = 360):
             "SELECT * FROM status_seconds WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
             (client_id, limit),
         )
-        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+        return JSONResponse(content=rows_to_table([dict(row) for row in cursor.fetchall()]))
 
 
 @app.get("/status/minutes")
 async def get_status_minutes(client_id: int, limit: int = 1440):
-    """
-    获取整理计算后的分钟级数据。
-    - client_id: 客户端 ID
-    - limit: 返回的记录数，默认为 1440（24 小时数据）
-    """
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
         cursor.row_factory = sqlite3.Row
@@ -649,16 +471,11 @@ async def get_status_minutes(client_id: int, limit: int = 1440):
             "SELECT * FROM status_minutes WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
             (client_id, limit),
         )
-        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+        return JSONResponse(content=rows_to_table([dict(row) for row in cursor.fetchall()]))
 
 
 @app.get("/status/hours")
 async def get_status_hours(client_id: int, limit: int = 8760):
-    """
-    获取整理计算后的小时级数据。
-    - client_id: 客户端 ID
-    - limit: 返回的记录数，默认为 8760（365 天数据）
-    """
     with sqlite3.connect(DATABASE) as conn:
         cursor = conn.cursor()
         cursor.row_factory = sqlite3.Row
@@ -666,10 +483,11 @@ async def get_status_hours(client_id: int, limit: int = 8760):
             "SELECT * FROM status_hours WHERE client_id = ? ORDER BY timestamp DESC LIMIT ?",
             (client_id, limit),
         )
-        return JSONResponse(content=[dict(row) for row in cursor.fetchall()])
+        return JSONResponse(content=rows_to_table([dict(row) for row in cursor.fetchall()]))
 
 
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "Admin123")
+
 
 def verify_admin_token(authorization: str = None) -> bool:
     if not authorization:
@@ -697,7 +515,7 @@ async def admin_get_clients(authorization: str = Header(None)):
         cursor.row_factory = sqlite3.Row
         cursor.execute("SELECT * FROM client ORDER BY id")
         results = cursor.fetchall()
-        return JSONResponse(content=[dict(row) for row in results])
+        return JSONResponse(content=rows_to_table([dict(row) for row in results]))
 
 
 @app.put("/admin/client/{client_id}")
@@ -750,6 +568,8 @@ async def admin_delete_client(client_id: int, authorization: str = Header(None))
 
 
 KV = {}
+
+
 @app.get("/")
 async def route_get_index():
     key = 'index.html'
@@ -762,9 +582,6 @@ async def route_get_index():
 
 @app.get("/{p:path}")
 async def not_found_handler(p: str):
-    """
-    兜底页面
-    """
     return Response(
         status_code=404,
         content='''
