@@ -574,7 +574,7 @@ KV = {}
 async def route_get_index():
     key = 'index.html'
     if key not in KV:
-        resp = requests.get("https://raw.githubusercontent.com/hochenggang/kunlun-frontend/refs/heads/main/dist/index.html")
+        resp = requests.get("https://github.com/hochenggang/kunlun-frontend/releases/latest/download/index.html")
         KV[key] = resp.content
     
     return Response(content=KV[key], media_type="text/html")
