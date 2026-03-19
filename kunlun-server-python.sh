@@ -582,7 +582,7 @@ do_client_approve() {
     
     local response=$(api_request "PUT" "/admin/client/$client_id" '{"status": 1}')
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已审核通过"
     else
         print_error "操作失败: $response"
@@ -603,7 +603,7 @@ do_client_reject() {
     
     local response=$(api_request "PUT" "/admin/client/$client_id" '{"status": 0}')
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已设置为待审核状态"
     else
         print_error "操作失败: $response"
@@ -631,7 +631,7 @@ do_client_delete() {
     
     local response=$(api_request "DELETE" "/admin/client/$client_id")
     
-    if echo "$response" | grep -q '"ok": true'; then
+    if echo "$response" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
         print_info "客户端 $client_id 已删除"
     else
         print_error "操作失败: $response"
