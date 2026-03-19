@@ -50,6 +50,15 @@ detect_app_dir() {
         return 0
     fi
     
+    if [[ -f "$SERVICE_FILE" ]]; then
+        local working_dir=$(grep "^WorkingDirectory=" "$SERVICE_FILE" 2>/dev/null | cut -d'=' -f2)
+        if [[ -n "$working_dir" ]] && [[ -f "$working_dir/.env" ]]; then
+            APP_DIR="$working_dir"
+            ENV_FILE="$APP_DIR/.env"
+            return 0
+        fi
+    fi
+    
     return 1
 }
 
@@ -69,7 +78,18 @@ check_app_dir() {
 }
 
 get_admin_token() {
-    detect_app_dir
+    if ! detect_app_dir; then
+        print_error "未找到安装目录"
+        echo ""
+        echo "请确保："
+        echo "  1. 已完成安装"
+        echo "  2. 从安装目录执行此脚本，或使用完整路径"
+        echo ""
+        echo "示例："
+        echo "  cd /opt/apps/kunlun-server-python"
+        echo "  ./kunlun-server-python.sh status"
+        exit 1
+    fi
     if [[ -f "$ENV_FILE" ]]; then
         ADMIN_TOKEN=$(grep "^ADMIN_TOKEN=" "$ENV_FILE" | cut -d'=' -f2)
     fi
