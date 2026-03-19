@@ -37,7 +37,39 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+detect_app_dir() {
+    if [[ -f "$(pwd)/.env" ]] && grep -q "ADMIN_TOKEN" "$(pwd)/.env" 2>/dev/null; then
+        APP_DIR="$(pwd)"
+        ENV_FILE="$APP_DIR/.env"
+        return 0
+    fi
+    
+    if [[ -f "/opt/apps/$APP_NAME/.env" ]]; then
+        APP_DIR="/opt/apps/$APP_NAME"
+        ENV_FILE="$APP_DIR/.env"
+        return 0
+    fi
+    
+    return 1
+}
+
+check_app_dir() {
+    if ! detect_app_dir; then
+        print_error "未找到安装目录"
+        echo ""
+        echo "请确保："
+        echo "  1. 已完成安装"
+        echo "  2. 从安装目录执行此脚本，或使用完整路径"
+        echo ""
+        echo "示例："
+        echo "  cd /opt/apps/kunlun-server-python"
+        echo "  ./kunlun-server-python.sh status"
+        exit 1
+    fi
+}
+
 get_admin_token() {
+    detect_app_dir
     if [[ -f "$ENV_FILE" ]]; then
         ADMIN_TOKEN=$(grep "^ADMIN_TOKEN=" "$ENV_FILE" | cut -d'=' -f2)
     fi
@@ -316,11 +348,11 @@ print_summary() {
     echo "访问地址: http://<server-ip>:$SERVICE_PORT"
     echo ""
     echo "常用命令:"
-    echo "  查看状态: $0 status"
-    echo "  查看日志: $0 logs"
-    echo "  查看客户端: $0 client list"
-    echo "  审核客户端: $0 client approve <id>"
-    echo "  升级版本: $0 upgrade"
+    echo "  查看状态: $SCRIPT_NAME status"
+    echo "  查看日志: $SCRIPT_NAME logs"
+    echo "  查看客户端: $SCRIPT_NAME client list"
+    echo "  审核客户端: $SCRIPT_NAME client approve <id>"
+    echo "  升级版本: $SCRIPT_NAME upgrade"
     echo ""
 }
 
@@ -347,6 +379,7 @@ do_install() {
 
 do_uninstall() {
     check_root "uninstall"
+    check_app_dir
     print_banner
     echo -e "${YELLOW}卸载 Kunlun Server${NC}"
     echo ""
@@ -376,6 +409,7 @@ do_uninstall() {
 }
 
 do_status() {
+    check_app_dir
     print_banner
     if systemctl is-active --quiet "$APP_NAME"; then
         echo -e "服务状态: ${GREEN}运行中${NC}"
@@ -412,6 +446,7 @@ do_logs() {
 }
 
 do_version() {
+    check_app_dir
     print_banner
     if [[ -f "$APP_DIR/.version" ]]; then
         echo "当前版本: $(cat $APP_DIR/.version)"
@@ -423,6 +458,7 @@ do_version() {
 
 do_upgrade() {
     check_root "upgrade"
+    check_app_dir
     check_service_running
     
     local current_version
@@ -577,7 +613,7 @@ do_client_approve() {
     
     if [[ -z "$client_id" ]]; then
         print_error "请指定客户端 ID"
-        print_info "用法: $0 client approve <id>"
+        print_info "用法: $SCRIPT_NAME client approve <id>"
         exit 1
     fi
     
@@ -598,7 +634,7 @@ do_client_reject() {
     
     if [[ -z "$client_id" ]]; then
         print_error "请指定客户端 ID"
-        print_info "用法: $0 client reject <id>"
+        print_info "用法: $SCRIPT_NAME client reject <id>"
         exit 1
     fi
     
@@ -619,7 +655,7 @@ do_client_delete() {
     
     if [[ -z "$client_id" ]]; then
         print_error "请指定客户端 ID"
-        print_info "用法: $0 client delete <id>"
+        print_info "用法: $SCRIPT_NAME client delete <id>"
         exit 1
     fi
     
@@ -647,7 +683,7 @@ do_client_info() {
     
     if [[ -z "$client_id" ]]; then
         print_error "请指定客户端 ID"
-        print_info "用法: $0 client info <id>"
+        print_info "用法: $SCRIPT_NAME client info <id>"
         exit 1
     fi
     
