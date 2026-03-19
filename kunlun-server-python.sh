@@ -3,6 +3,7 @@
 set -e
 
 APP_NAME="kunlun-server-python"
+SCRIPT_NAME="kunlun-server-python.sh"
 APP_DIR="/opt/apps/$APP_NAME"
 SERVICE_FILE="/etc/systemd/system/$APP_NAME.service"
 REPO_URL="https://github.com/hochenggang/kunlun-server-python"
@@ -54,7 +55,7 @@ get_service_port() {
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "此操作需要 root 权限"
-        print_info "请使用: sudo $0 $1"
+        print_info "请使用: sudo $SCRIPT_NAME $1"
         exit 1
     fi
 }
@@ -97,7 +98,7 @@ get_latest_version() {
 
 show_help() {
     print_banner
-    echo "用法: $0 <命令> [参数]"
+    echo "用法: $SCRIPT_NAME <命令> [参数]"
     echo ""
     echo -e "${CYAN}服务管理:${NC}"
     echo "  install              交互式安装服务"
@@ -122,11 +123,11 @@ show_help() {
     echo "  version              显示当前版本"
     echo ""
     echo "示例:"
-    echo "  $0 install"
-    echo "  $0 client list"
-    echo "  $0 client approve 1"
-    echo "  $0 client delete 2"
-    echo "  $0 upgrade"
+    echo "  $SCRIPT_NAME install"
+    echo "  $SCRIPT_NAME client list"
+    echo "  $SCRIPT_NAME client approve 1"
+    echo "  $SCRIPT_NAME client delete 2"
+    echo "  $SCRIPT_NAME upgrade"
 }
 
 get_user_input() {
@@ -519,18 +520,20 @@ do_client_list() {
     local response=$(api_request "GET" "/admin/client")
     
     if command -v jq &> /dev/null; then
-        echo "$response" | jq -r '(.[0] | keys_unsorted | @tsv), (.[] | [.id, .machine_id[0:12], .hostname, .status, .ip // "N/A", .last_update] | @tsv)' | column -t -s $'\t'
+        printf "%-5s %-16s %-20s %-8s %-20s %s\n" "ID" "MACHINE_ID" "HOSTNAME" "STATUS" "IP" "LAST_UPDATE"
+        echo "-----------------------------------------------------------------------------------------"
+        echo "$response" | jq -r '.[] | printf "%-5s %-16s %-20s %-8s %-20s %s\n" (.id|tostring), (.machine_id[:12]), .hostname, (.status|tostring), (.ip // "N/A"), (.last_update | tostring)'
     else
         echo "$response" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 if data:
-    headers = ['ID', 'MACHINE_ID', 'HOSTNAME', 'STATUS', 'IP', 'LAST_UPDATE']
-    print('\t'.join(headers))
-    print('-' * 80)
+    print(f\"{'ID':<5} {'MACHINE_ID':<16} {'HOSTNAME':<20} {'STATUS':<8} {'IP':<20} {'LAST_UPDATE'}\")
+    print('-' * 85)
     for c in data:
         mid = c.get('machine_id', '')[:12]
-        print(f\"{c['id']}\t{mid}\t{c.get('hostname', 'N/A')}\t{c.get('status', 'N/A')}\t{c.get('ip', 'N/A')}\t{c.get('last_update', 'N/A')}\")
+        ip = c.get('ip', 'N/A')[:18] if c.get('ip') else 'N/A'
+        print(f\"{c['id']:<5} {mid:<16} {c.get('hostname', 'N/A'):<20} {c.get('status', 'N/A'):<8} {ip:<20} {c.get('last_update', 'N/A')}\")
 "
     fi
 }

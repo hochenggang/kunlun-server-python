@@ -282,6 +282,25 @@ def calculate_delta(new_data: KunlunReportLine, last_data: KunlunReportLine) -> 
     return KunlunReportLine(**delta_data)
 
 
+def get_client_ip(request: Request) -> str:
+    """
+    获取客户端真实 IP，支持 CDN 代理场景。
+    优先级：X-Forwarded-For > X-Real-IP > request.client.host
+    """
+    x_forwarded_for = request.headers.get("X-Forwarded-For")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    
+    x_real_ip = request.headers.get("X-Real-IP")
+    if x_real_ip:
+        return x_real_ip.strip()
+    
+    if request.client:
+        return request.client.host
+    
+    return "unknown"
+
+
 @app.middleware("http")
 async def global_error_handler(request: Request, call_next):
     try:
@@ -321,7 +340,7 @@ async def route_post_status(
             },
         )
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_client_ip(request)
     client_id, client_status = db_get_client_id(
         kunlun_report_line.machine_id, kunlun_report_line.hostname, client_ip
     )
@@ -515,7 +534,7 @@ async def admin_get_clients(authorization: str = Header(None)):
         cursor.row_factory = sqlite3.Row
         cursor.execute("SELECT * FROM client ORDER BY id")
         results = cursor.fetchall()
-        return JSONResponse(content=rows_to_table([dict(row) for row in results]))
+        return JSONResponse(content=[dict(row) for row in results])
 
 
 @app.put("/admin/client/{client_id}")
